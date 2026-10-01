@@ -1,0 +1,32 @@
+name: deploybench
+services:
+  postgres:
+    image: postgres:18-alpine
+
+    environment:
+      POSTGRES_USER: deploybench
+      POSTGRES_PASSWORD: deploybench
+      POSTGRES_DB: deploybench
+      
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - deploybench-postgres-data:/var/lib/postgresql
+      
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.10.2-alpine
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - deploybench-redis-data:/data
+
+    restart: unless-stopped
+
+volumes:
+  deploybench-postgres-data:
+  deploybench-redis-data:
