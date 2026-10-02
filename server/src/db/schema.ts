@@ -28,6 +28,7 @@ export const users = pgTable(
   "users",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    name : varchar("name", {length : 256}).notNull(),
     email: varchar("email", { length: 255 }).notNull(),
     passwordHash: text("password_hash").notNull(),
     ...timeStamps,
@@ -41,7 +42,7 @@ export const sessions = pgTable(
   "sessions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id").references(() => users.id, {onDelete : "cascade"}),
+    userId: uuid("user_id").references(() => users.id, {onDelete : "cascade"}).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -54,7 +55,7 @@ export const sessions = pgTable(
 );
 
 export const webhookStatusEnum = pgEnum("webhook_status", [
-  "recevied",
+  "received",
   "queued",
   "processing",
   "processed",
@@ -74,7 +75,7 @@ export const webhookDeliveries = pgTable(
       () => githubIntegrations.id,
     ),
     githubDeliveryId: varchar("github_delivery_id", { length: 128 }).notNull(), // from http-header : X-GitHub-Delivery.
-    status: webhookStatusEnum("status").default("recevied").notNull(),
+    status: webhookStatusEnum("status").default("received").notNull(),
     eventName: varchar("event_name", { length: 64 }).notNull(), //  from http-header : X-GitHub-Event
     ref: varchar("ref", { length: 512 }),
     isForced: boolean("is_forced").notNull(),
@@ -84,7 +85,7 @@ export const webhookDeliveries = pgTable(
     beforeSha: varchar("before_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref before the push.
     afterSha: varchar("after_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref after the push.
     lastError: text("last_error"),
-    receivedAt: timestamp("recevied_at", { withTimezone: true })
+    receivedAt: timestamp("received_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
     attemptCount: integer("attempt_count").default(0).notNull(),
@@ -158,7 +159,7 @@ export const githubIntegrations = pgTable(
       .notNull(),
     accessTokenSecretName: varchar("access_token_secret_name", {
       length: 128,
-    }).notNull(),
+    }),
     enabled: boolean("enabled").default(true).notNull(),
     ...timeStamps,
   },
@@ -418,7 +419,7 @@ export const jobStatusEnum = pgEnum("job_status", [
   "blocked",
   "queued",
   "running",
-  "succcess",
+  "success",
   "failed",
   "cancelled",
   "skipped",
@@ -800,7 +801,7 @@ export const outboxStatusEnum = pgEnum("outbox_status", [
 ]);
 
 export const outboxMessages = pgTable("outbox_messages",{
-  id : uuid("id").defaultRandom().notNull(),
+  id : uuid("id").defaultRandom().primaryKey(),
   messageType: varchar("message_type",{ length: 120}).notNull(),
   aggregateType: varchar("aggregate_type",{ length: 64 }).notNull(),
   aggregateId: varchar("aggregate_id",{ length: 128 }).notNull(),
