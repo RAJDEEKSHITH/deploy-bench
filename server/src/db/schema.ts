@@ -89,7 +89,7 @@ export const webhookDeliveries = pgTable(
       .defaultNow()
       .notNull(),
     attemptCount: integer("attempt_count").default(0).notNull(),
-    lastAttemptAt: timestamp("attempted_at", { withTimezone: true }),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     processedAt: timestamp("processed_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -126,8 +126,7 @@ export const projects = pgTable(
       .default(".cicd/pipeline.yaml")
       .notNull(),
     createdById: uuid("created_by_id")
-      .references(() => users.id, {onDelete : "set null"})
-      .notNull(),
+      .references(() => users.id, {onDelete : "cascade"}).notNull(),
     ...timeStamps,
   },
   (t) => [
@@ -177,8 +176,8 @@ export const secrets = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     name: varchar("name", { length: 128 }).notNull(),
-    projectId: uuid("project_id").references(() => projects.id),
-    environmentId: uuid("environment_id").references(() => environments.id),
+    projectId: uuid("project_id").references(() => projects.id, {onDelete : "cascade"}),
+    environmentId: uuid("environment_id").references(() => environments.id, {onDelete : "cascade"}),
     cipherText: text("cipher_text").notNull(),
     iv: varchar("iv", { length: 128 }).notNull(),
     authTag: varchar("auth_tag", { length: 128 }).notNull(),
@@ -217,7 +216,7 @@ export const environments = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     projectId: uuid("project_id").references(() => projects.id, {
       onDelete: "cascade",
-    }),
+    }).notNull(),
     name: varchar("name", { length: 128 }).notNull(),
     slug: varchar("slug", { length: 128 }).notNull(),
     targetType: deploymentTargetTypeEnum("target_type").notNull(),
@@ -476,7 +475,7 @@ export const jobDependencies = pgTable(
       .notNull(),
     dependsOnJobId: uuid("depends_on_job_id").references(() => jobs.id, {
       onDelete: "cascade",
-    }),
+    }).notNull(),
   },
   (t) => [
     uniqueIndex("job_dependencies_unique").on(t.jobId, t.dependsOnJobId),
@@ -692,7 +691,7 @@ export const deployments = pgTable("deployments",{
   action : deploymentActionEnum("action").notNull(),
   status : deploymentStatusEnum("status").default("queued").notNull(),
   commitSha: varchar("commit_sha",{length:128}).notNull(),// Commit this deployment is attempting to deploy/restore
-  previousCommitSha: varchar("previous_commit_sha",{length:128}).notNull(), // Commit actually deployed immediately before this deployment began
+  previousCommitSha: varchar("previous_commit_sha",{length:128}), // Commit actually deployed immediately before this deployment began
   // releaseref points to physical address of our deployable artifact, containerimage or any other asset
   releaseRef : varchar("release_ref",{length : 512}).notNull(), // // Exact release this deployment is attempting to deploy/restore.
   previousReleaseRef: varchar("previous_release_ref",{length: 512}),// Exact release actually deployed immediately before this deployment began.
@@ -773,7 +772,7 @@ export const logChunks = pgTable("log_chunks",{
   logStreamId: uuid("log_stream_id").references(() => logStreams.id,{
       onDelete: "cascade",
       }).notNull(),
-  sizeInBytes : integer("size_in_bytes"),
+  sizeInBytes : integer("size_in_bytes").notNull(),
   s3Key: text("s3_key").notNull(),
   sequence: integer("sequence").notNull(),
   lineCount: integer("line_count").notNull(),

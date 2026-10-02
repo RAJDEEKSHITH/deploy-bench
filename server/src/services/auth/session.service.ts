@@ -21,7 +21,7 @@ export const createSession = async (userId: string) => {
   if (!session) {
     throw new AppError("Failed to create session", 500);
   }
-  return session;
+  return session.id;
 };
 
 export const enforceSessionLimit = async (userId: string) => {

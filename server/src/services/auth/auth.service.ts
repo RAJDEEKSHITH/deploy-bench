@@ -1,5 +1,5 @@
 import bcrypt from "bcrypt";
-import type { LoginInput, RegisterInput } from "../../validators/auth.validator.js";
+import type { LoginInput, RegisterInput } from "../../validators/auth/auth.validator.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema.js";
 import { AppError } from "../../utils/app.error.js";

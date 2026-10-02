@@ -1,6 +1,6 @@
 import * as z from "zod";
 
-const registerSchema = z.object({
+export const registerSchema = z.object({
   name: z
     .string()
     .trim()
@@ -13,7 +13,7 @@ const registerSchema = z.object({
     .max(100, "Password is too long"),
 });
 
-const loginSchema = z.object({
+export const loginSchema = z.object({
   email: z.email("Please enter a valid email address").toLowerCase(),
   password: z
     .string()

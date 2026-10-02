@@ -27,6 +27,7 @@ pnpm-debug.log*
 # OS
 .DS_Store
 
+DEPLOYBENCH_SERVER_IMPLEMENTATION_PLAN
 PROJECT_STRUCTURE.*
 schemanotes
 webhookpayload.js
