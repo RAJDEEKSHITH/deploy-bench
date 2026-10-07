@@ -1,0 +1,36 @@
+import type { Job } from "bullmq";
+import {
+  executeJobAttempt,
+} from "../services/execution/execution.service.js";
+
+export const JOB_ATTEMPT_QUEUE_NAME = "job-attempt";
+
+export type JobAttemptQueueData = {
+  jobAttemptId: string;
+};
+
+export const processJobAttempt = async (
+  job: Job<JobAttemptQueueData>,
+) => {
+  const { jobAttemptId } = job.data;
+
+  if (
+    typeof jobAttemptId !== "string" ||
+    jobAttemptId.length === 0
+  ) {
+    throw new Error(
+      "Invalid job attempt queue payload",
+    );
+  }
+
+  if (!job.id) {
+    throw new Error(
+      "BullMQ job does not have an ID",
+    );
+  }
+
+  return executeJobAttempt({
+    attemptId: jobAttemptId,
+    queueJobId: String(job.id),
+  });
+};

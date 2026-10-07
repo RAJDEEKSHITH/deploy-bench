@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "node --env-file=.env --import=tsx/esm --watch src/app.ts",
-    "worker": "node --env-file=.env --import=tsx/esm --watch src/app.ts",
+    "worker": "node --env-file=.env --import=tsx/esm --watch src/worker.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/app.js",
     "typecheck": "tsc --noEmit",
@@ -30,6 +30,9 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@archiver/archiver": "^0.3.0",
+    "@aws-sdk/client-ecr": "^3.1146.0",
+    "@aws-sdk/client-s3": "^3.1146.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^6.3.9",
     "cookie-parser": "^1.4.7",
@@ -40,6 +43,7 @@
     "ioredis": "^6.0.0",
     "js-yaml": "^5.4.2",
     "pg": "^8.23.0",
+    "yaml": "^2.9.1",
     "zod": "^4.6.5"
   }
 }

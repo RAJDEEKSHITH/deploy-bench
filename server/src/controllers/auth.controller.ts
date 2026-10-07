@@ -47,7 +47,9 @@ export const getCurrentUser = async (req: Request, res: Response, _next: NextFun
     return res.status(200).json({
         success: true,
         message : "user information",
-        data : req.user!
+        data : {
+            user: req.user!
+        }
     })
 }
 

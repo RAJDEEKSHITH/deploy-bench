@@ -1,4 +1,10 @@
-import {createCipheriv, createDecipheriv, randomBytes} from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  createHmac,
+  timingSafeEqual,
+} from "node:crypto";
 import { env } from "../config/env.js";
 
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
@@ -13,16 +19,16 @@ export interface EncryptedData {
 }
 
 const getEncryptionKey = (): Buffer => {
- if (cachedKey) return cachedKey;
+  if (cachedKey) return cachedKey;
   cachedKey = Buffer.from(env.APP_ENCRYPTION_KEY, "hex");
   return cachedKey;
 };
 
-export const encrypt = (plaintext: string) : EncryptedData => {
+export const encrypt = (plaintext: string): EncryptedData => {
   const key = getEncryptionKey();
   const iv = randomBytes(IV_LENGTH); // fresh random IV for every encryption.
 
-  const cipher = createCipheriv(ENCRYPTION_ALGORITHM,key,iv);
+  const cipher = createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
 
   const ciphertext = Buffer.concat([
     cipher.update(plaintext, "utf8"),
@@ -39,10 +45,13 @@ export const encrypt = (plaintext: string) : EncryptedData => {
 };
 
 export const decrypt = ({ ciphertext, iv, authTag }: EncryptedData): string => {
-    
   const key = getEncryptionKey();
 
-  const decipher = createDecipheriv(ENCRYPTION_ALGORITHM,key,Buffer.from(iv, "base64"));
+  const decipher = createDecipheriv(
+    ENCRYPTION_ALGORITHM,
+    key,
+    Buffer.from(iv, "base64"),
+  );
 
   decipher.setAuthTag(Buffer.from(authTag, "base64"));
 
@@ -52,4 +61,36 @@ export const decrypt = ({ ciphertext, iv, authTag }: EncryptedData): string => {
   ]);
 
   return plaintext.toString("utf8");
+};
+
+const SIGNATURE_PREFIX = "sha256=";
+const SIGNATURE_HEX_LENGTH = 64;
+
+export const verifyGithubSignature = ({
+  rawBody,
+  secret,
+  signature,
+}: {
+  rawBody: Buffer;
+  secret: string;
+  signature: string | undefined;
+}): boolean => {
+  if (!signature?.startsWith(SIGNATURE_PREFIX)) return false;
+
+  const receivedHex = signature.slice(SIGNATURE_PREFIX.length);
+
+  if (
+    receivedHex.length !== SIGNATURE_HEX_LENGTH ||
+    !/^[0-9a-fA-F]+$/.test(receivedHex)
+  ) {
+    return false;
+  }
+
+  const expectedDigest = createHmac("sha256", secret).update(rawBody).digest();
+
+  const receivedDigest = Buffer.from(receivedHex, "hex");
+
+  if (receivedDigest.length !== expectedDigest.length) return false;
+
+  return timingSafeEqual(expectedDigest, receivedDigest);
 };

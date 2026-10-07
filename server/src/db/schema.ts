@@ -70,10 +70,10 @@ export const webhookDeliveries = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     projectId: uuid("project_id").references(() => projects.id, {
       onDelete: "cascade",
-    }),
+    }).notNull(),
     githubIntegrationId: uuid("github_integration_id").references(
       () => githubIntegrations.id,
-    ),
+    ).notNull(),
     githubDeliveryId: varchar("github_delivery_id", { length: 128 }).notNull(), // from http-header : X-GitHub-Delivery.
     status: webhookStatusEnum("status").default("received").notNull(),
     eventName: varchar("event_name", { length: 64 }).notNull(), //  from http-header : X-GitHub-Event
@@ -85,17 +85,13 @@ export const webhookDeliveries = pgTable(
     beforeSha: varchar("before_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref before the push.
     afterSha: varchar("after_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref after the push.
     lastError: text("last_error"),
-    receivedAt: timestamp("received_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
     attemptCount: integer("attempt_count").default(0).notNull(),
     lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     processedAt: timestamp("processed_at", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
     deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
+    ...timeStamps
   },
   (t) => [
     uniqueIndex("webhook_deliveries_integration_delivery_unique").on(
@@ -153,9 +149,6 @@ export const githubIntegrations = pgTable(
     webhookSecretAuthTag: varchar("webhook_secret_auth_tag", {
       length: 128,
     }).notNull(),
-    webhookSecretVersion: integer("webhook_secret_version")
-      .default(1)
-      .notNull(),
     accessTokenSecretName: varchar("access_token_secret_name", {
       length: 128,
     }),
@@ -164,10 +157,6 @@ export const githubIntegrations = pgTable(
   },
   (t) => [
     uniqueIndex("github_integrations_project_unique").on(t.projectId),
-    check(
-      "github_integrations_webhook_secret_version",
-      sql`${t.webhookSecretVersion} > 0`,
-    ),
   ],
 );
 
@@ -181,7 +170,6 @@ export const secrets = pgTable(
     cipherText: text("cipher_text").notNull(),
     iv: varchar("iv", { length: 128 }).notNull(),
     authTag: varchar("auth_tag", { length: 128 }).notNull(),
-    version: integer("version").default(1).notNull(), // This does not mean we retain historical plaintext versions.
     ...timeStamps,
   },
   (t) => [
@@ -194,14 +182,13 @@ export const secrets = pgTable(
       t.name,
     ),
     check(
-      "secrets_excatly_one_scope_check",
+      "secrets_exactly_one_scope_check",
       sql`(
       (${t.projectId} IS NOT NULL AND ${t.environmentId} IS NULL)
       OR
      (${t.projectId} IS NULL AND ${t.environmentId} IS NOT NULL)
      )`,
     ),
-    check("secrets_version_check", sql`${t.version} > 0`),
   ],
 );
 
@@ -232,6 +219,8 @@ export const environments = pgTable(
       .notNull(),
     // Desired state.
     // Application sets this to the successful run that has been selected for deployment.
+    // A commit can have several runs (manual / retry), so store the chosen run too.
+    desiredRunId: uuid("desired_run_id").references(() => runs.id, { onDelete: "set null" }),
     desiredCommitSha: varchar("desired_commit_sha", { length: 128 }),
     // Actually deployed commit
     currentCommitSha: varchar("current_commit_sha", { length: 128 }),
@@ -268,6 +257,10 @@ export const environments = pgTable(
         )
       `,
     ),
+    // backend (ssh_ec2) deployments must be health-checked 
+   check("environments_backend_health_check_required",
+   sql`${t.targetType} <> 'ssh_ec2' OR ${t.healthCheckUrl} IS NOT NULL`,
+  ),
   ],
 );
 
@@ -285,7 +278,7 @@ export const pipelineVersions = pgTable(
         onDelete: "cascade",
       })
       .notNull(),
-    path: varchar("path", { length: 256 }).notNull(),
+    path: varchar("path", { length: 512 }).notNull(),
     configHash: varchar("config_hash", { length: 128 }).notNull(),
     commitSha: varchar("commit_sha", { length: 128 }).notNull(),
     rawYaml: text("raw_yaml").notNull(),
@@ -434,7 +427,7 @@ export const jobs = pgTable(
       .notNull(),
     key: varchar("key", { length: 120 }).notNull(), // for machine readable
     name: varchar("name", { length: 128 }).notNull(), // for human readable
-    definition: jsonb("definition").$type<Record<string, unknown>>(),
+    definition: jsonb("definition").$type<Record<string, unknown>>().notNull(),
     status: jobStatusEnum("status").default("blocked").notNull(),
     allowFailure: boolean("allow_failure").default(false).notNull(), //If true, a failed job does not fail the whole run
     errorCode: varchar("error_code", {

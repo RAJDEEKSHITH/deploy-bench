@@ -15,7 +15,6 @@ export type PublicGithubIntegration = Omit<
   | "webhookSecretCiphertext"
   | "webhookSecretIv"
   | "webhookSecretAuthTag"
-  | "webhookSecretVersion"
 >;
 
 
@@ -47,14 +46,12 @@ const toPublicIntegration = (integration: GithubIntegrationRow): PublicGithubInt
     webhookSecretCiphertext,
     webhookSecretIv,
     webhookSecretAuthTag,
-    webhookSecretVersion,
     ...publicIntegration
   } = integration;
 
   void webhookSecretCiphertext;
   void webhookSecretIv;
   void webhookSecretAuthTag;
-  void webhookSecretVersion;
 
   return publicIntegration;
 };
@@ -93,7 +90,6 @@ export const createGithubIntegration = async (
       webhookSecretCiphertext: encrypted.ciphertext,
       webhookSecretIv: encrypted.iv,
       webhookSecretAuthTag: encrypted.authTag,
-      webhookSecretVersion: 1,
       accessTokenSecretName: data.accessTokenSecretName,
       enabled: data.enabled,
     }).returning();
@@ -150,7 +146,6 @@ export const updateGithubIntegration = async (
     updates.webhookSecretCiphertext = encrypted.ciphertext;
     updates.webhookSecretIv = encrypted.iv;
     updates.webhookSecretAuthTag = encrypted.authTag;
-    updates.webhookSecretVersion = 1;
   }
 
   if (data.accessTokenSecretName !== undefined) {
