@@ -156,7 +156,7 @@ const getPgCode = (error: unknown): string | undefined => {
 const awsErrorName = (error: unknown): string => (error instanceof Error ? error.name : "UnknownError");
 const isAppError = (error: unknown): error is AppError => error instanceof AppError;
 const isCanceledOrSuperseded = (status: typeof runs.$inferSelect.status): boolean =>
-  status === "canceled" || status === "superseded";
+  status === "cancelled" || status === "superseded";
 
 /* -------------------------------------------------------------------------- */
 /* Stage 31: deterministic image references                                   */

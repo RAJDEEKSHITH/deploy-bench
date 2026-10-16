@@ -1,7 +1,5 @@
 import { useState } from "react";
-
 import { Link, useNavigate, useParams } from "react-router-dom";
-
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 import {
@@ -9,13 +7,14 @@ import {
   useProject,
   useUpdateProject,
 } from "@/hooks/useProjects";
-
 import { getApiErrorMessage } from "@/lib/api-error";
 
 import { ProjectForm } from "@/components/projects/ProjectForm";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import { GithubIntegrationCard } from "@/components/projects/GithubIntegrationCard";
 import ProjectSecrets from "@/components/projects/ProjectSecrets";
+import { ProjectRunsSection } from "@/components/projects/ProjectRunsSection";
+import { ProjectEnvironmentsSection } from "@/components/projects/ProjectEnvironmentsSection";
 import { buttonVariants, Button } from "@/components/ui/button";
 
 import type { UpdateProjectInput } from "@/types/project";
@@ -26,7 +25,6 @@ const ProjectDetailsPage = () => {
   }>();
 
   const navigate = useNavigate();
-
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const {
@@ -37,7 +35,6 @@ const ProjectDetailsPage = () => {
   } = useProject(projectId ?? "");
 
   const updateMutation = useUpdateProject(projectId ?? "");
-
   const deleteMutation = useDeleteProject();
 
   if (!projectId) {
@@ -82,21 +79,17 @@ const ProjectDetailsPage = () => {
     try {
       await updateMutation.mutateAsync(data);
     } catch {
-      // Error is handled by the toast in useUpdateProject.
+      // Handled by toast in useUpdateProject
     }
   };
 
   const handleDelete = async () => {
     try {
       await deleteMutation.mutateAsync(projectId);
-
       setDeleteDialogOpen(false);
-
-      navigate("/projects", {
-        replace: true,
-      });
+      navigate("/projects", { replace: true });
     } catch {
-      // Error is handled by the toast in useDeleteProject.
+      // Handled by toast in useDeleteProject
     }
   };
 
@@ -124,11 +117,22 @@ const ProjectDetailsPage = () => {
           </p>
         </div>
 
+        {/* Pipeline Runs */}
+        <ProjectRunsSection
+          projectId={project.id}
+          defaultBranch={project.defaultBranch}
+        />
+
+        {/* Environments & Deployments */}
+        <ProjectEnvironmentsSection
+          projectId={project.id}
+          defaultBranch={project.defaultBranch}
+        />
+
         {/* Project Settings */}
         <div className="mt-8 rounded-xl border bg-background p-6">
           <div className="mb-6">
             <h2 className="font-medium">Project settings</h2>
-
             <p className="mt-1 text-sm text-muted-foreground">
               Update the project configuration used by DeployBench.
             </p>
@@ -141,13 +145,13 @@ const ProjectDetailsPage = () => {
           />
         </div>
 
-        {/* GitHub Integration */}
+        {/* GitHub Integration & Secrets */}
         <GithubIntegrationCard projectId={project.id} />
         <ProjectSecrets projectId={project.id} />
+
         {/* Danger Zone */}
         <div className="mt-8 rounded-xl border border-destructive/30 bg-background p-6">
           <h2 className="font-medium">Danger zone</h2>
-
           <p className="mt-1 text-sm text-muted-foreground">
             Permanently remove this project from DeployBench.
           </p>

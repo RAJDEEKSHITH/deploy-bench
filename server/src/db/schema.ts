@@ -700,7 +700,7 @@ export const deployments = pgTable("deployments",{
   index("deployments_environment_id__created_at_idx").on(t.environmentId,t.createdAt),
   uniqueIndex("deployments_run_environment_unique")
   .on(t.runId, t.environmentId)
-  .where(sql`${t.status} NOT IN ('failed','canceled')`),
+  .where(sql`${t.status} NOT IN ('failed','cancelled')`),
   index("deployments_run_id_idx").on(t.runId),
   // using partial index to optimize, since most of the deployments have rollbackToDeploymentId NULL
   // index("deployments_rollback_to_deployment_id_idx").on(t.rollbackToDeploymentId)

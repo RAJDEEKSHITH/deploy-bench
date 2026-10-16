@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import DashboardPage from "@/pages/DashboardPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailsPage from "@/pages/ProjectDetailsPage";
+import RunDetailsPage from "@/pages/RunDetailsPage";
 
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import AppLayout from "@/components/layout/AppLayout";
@@ -13,12 +14,7 @@ export const ProtectedRoutes = {
   children: [
     {
       path: "/",
-      element: (
-        <Navigate
-          to="/dashboard"
-          replace
-        />
-      ),
+      element: <Navigate to="/dashboard" replace />,
     },
 
     {
@@ -38,6 +34,11 @@ export const ProtectedRoutes = {
         {
           path: "/projects/:projectId",
           element: <ProjectDetailsPage />,
+        },
+
+        {
+          path: "/projects/:projectId/runs/:runId",
+          element: <RunDetailsPage />,
         },
       ],
     },
