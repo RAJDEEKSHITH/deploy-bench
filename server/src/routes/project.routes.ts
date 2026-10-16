@@ -5,7 +5,7 @@ import {
   createProjectSchema,
   projectIdParamSchema,
   updateProjectSchema,
-} from "../validators/project/project.validator.js";
+} from "../validators/project.validator.js";
 import {validateBody,validateParams} from "../middlewares/validate.middleware.js";
 
 const router = Router();

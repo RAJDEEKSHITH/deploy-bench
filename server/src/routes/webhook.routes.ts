@@ -1,6 +1,6 @@
 import express from "express";
 import { validateParams} from "../middlewares/validate.middleware.js";
-import { projectIdParamSchema} from "../validators/project/project.validator.js";
+import { projectIdParamSchema} from "../validators/project.validator.js";
 import * as webhookController from "../controllers/webhook.controller.js";
 
 const router = express.Router();

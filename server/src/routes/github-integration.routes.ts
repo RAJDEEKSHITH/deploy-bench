@@ -4,7 +4,7 @@ import {
   createGithubIntegrationSchema,
   projectIdParamSchema,
   updateGithubIntegrationSchema,
-} from "../validators/github/github-integration.validator.js";
+} from "../validators/github-integration.validator.js";
 import {
   validateBody,
   validateParams,

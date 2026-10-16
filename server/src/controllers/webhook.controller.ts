@@ -2,7 +2,7 @@ import type { NextFunction,Request,Response} from "express";
 
 import { ingestGithubWebhook} from "../services/github/github-webhook.service.js";
 
-import type { ProjectIdParam } from "../validators/project/project.validator.js";
+import type { ProjectIdParam } from "../validators/project.validator.js";
 
 export const receiveGithubWebhook = async (
     req: Request<ProjectIdParam,any,Buffer>,

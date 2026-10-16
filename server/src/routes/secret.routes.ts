@@ -10,7 +10,7 @@ import {
   projectSecretIdParamsSchema,
   projectSecretParamsSchema,
   updateSecretSchema,
-} from "../validators/secrets/secret.validator.js";
+} from "../validators/secret.validator.js";
 
 const router = Router();
 

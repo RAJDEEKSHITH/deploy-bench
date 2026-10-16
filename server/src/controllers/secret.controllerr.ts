@@ -14,7 +14,7 @@ import type {
   ProjectSecretIdParams,
   EnvironmentSecretParams,
   EnvironmentSecretIdParams,
-} from "../validators/secrets/secret.validator.js";
+} from "../validators/secret.validator.js";
 
 // project scope secrets
 

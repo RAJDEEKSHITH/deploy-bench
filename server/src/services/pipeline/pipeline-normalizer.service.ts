@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ValidatedPipeline } from "../../validators/pipeline/pipeline.validator.js";
+import type { ValidatedPipeline } from "../../validators/pipeline.validator.js";
 
 export type NormalizedPipelineJob = {
   name: string;

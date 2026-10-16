@@ -4,7 +4,7 @@ import {
   getGithubIntegration,
   updateGithubIntegration,
 } from "../services/github/github-integration.service.js";
-import type { GithubIntegrationProjectParams as ProjectParams } from "../validators/github/github-integration.validator.js";
+import type { GithubIntegrationProjectParams as ProjectParams } from "../validators/github-integration.validator.js";
 
 export const create = async (
   req: Request<ProjectParams>,

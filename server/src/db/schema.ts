@@ -80,7 +80,6 @@ export const webhookDeliveries = pgTable(
     ref: varchar("ref", { length: 512 }),
     isForced: boolean("is_forced").notNull(),
     isDeleted: boolean("is_deleted").notNull(),
-    isSignatureValid: boolean("is_signature_valid").notNull(), // X-Hub-Signature-256, this header will be received if webhook is configured with secret
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     beforeSha: varchar("before_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref before the push.
     afterSha: varchar("after_sha", { length: 256 }).notNull(), // SHA of the most recent commit on ref after the push.
@@ -293,9 +292,10 @@ export const pipelineVersions = pgTable(
       .notNull(),
   },
   (t) => [
-    uniqueIndex("pipeline_versions_project_commit_unique").on(
+    uniqueIndex("pipeline_versions_project_commit__path_unique").on(
       t.projectId,
       t.commitSha,
+      t.path
     ),
     index("pipeline_versions_project_idx").on(t.projectId),
     check(
@@ -348,7 +348,7 @@ export const runStatusEnum = pgEnum("run_status", [
   "running",
   "success",
   "failed",
-  "canceled",
+  "cancelled",
   "superseded",
 ]);
 
@@ -444,7 +444,7 @@ export const jobs = pgTable(
   (t) => [
     // Job key must be unique inside a run.
     uniqueIndex("jobs_run_id_key_unique").on(t.runId, t.key),
-    uniqueIndex("jobs_run_id_id_unique").on(t.runId, t.id), // without this our run may stuck in inifite loop
+    uniqueIndex("jobs_run_id_id_unique").on(t.runId, t.id),
     index("jobs_run_status_idx").on(t.runId, t.status),
     index("jobs_status_next_attempt_at_idx").on(t.status, t.nextAttemptAt),
     check("jobs_timeout_check", sql`${t.timeoutSeconds} > 0`),
@@ -496,7 +496,7 @@ export const jobAttemptStatusEnum = pgEnum("job_attempt_status", [
   "running",
   "success",
   "failed",
-  "canceled",
+  "cancelled",
   "timed_out",
 ]);
 
@@ -508,7 +508,7 @@ export const failureClassEnum = pgEnum("failure_class", [
   "infrastructure",
   "timeout",
   "authorization",
-  "canceled",
+  "cancelled",
   "unknown",
 ]);
 // One physical execution of a logical job.
@@ -598,7 +598,7 @@ export const artifacts = pgTable(
     s3BucketName: varchar("s3_bucket_name", { length: 128 }).notNull(),
     // prefix pattern : projects/{projectId}/runs/{runId}/artifacts/{artifactId}-{sanitizedName}
     objectKey: text("object_key").notNull(),
-    sizeInBytes: bigint("size_in_bytes", { mode: "number" }).notNull(),
+    sizeInBytes: bigint("size_in_bytes", { mode: "number" }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -660,7 +660,7 @@ export const deploymentStatusEnum = pgEnum("deployment_status", [
   "verifying",
   "success",
   "failed",
-  "canceled",
+  "cancelled",
   "superseded",
 ]);
 
@@ -694,15 +694,24 @@ export const deployments = pgTable("deployments",{
   finishedAt: timestamp("finished_at", { withTimezone: true }), 
   ...timeStamps,
 },(t) => [
-  uniqueIndex("deployments_run_environment_unique").on(t.runId,t.environmentId),
+  uniqueIndex("deployments_one_active_per_env")
+  .on(t.environmentId)
+  .where(sql`${t.status} IN ('queued', 'deploying', 'verifying')`),
   index("deployments_environment_id__created_at_idx").on(t.environmentId,t.createdAt),
+  uniqueIndex("deployments_run_environment_unique")
+  .on(t.runId, t.environmentId)
+  .where(sql`${t.status} NOT IN ('failed','canceled')`),
   index("deployments_run_id_idx").on(t.runId),
   // using partial index to optimize, since most of the deployments have rollbackToDeploymentId NULL
   // index("deployments_rollback_to_deployment_id_idx").on(t.rollbackToDeploymentId)
   // .where(sql`${t.rollbackToDeploymentId} IS NOT NULL`),
   index("deployments_rollback_to_deployment_id_idx").on(t.rollbackToDeploymentId),
   // Rollback must point to a previous deployment
-  // Normal deployment must not contain a rollback target
+  // Normal deployment must not contain a rollback target,
+  check(
+  "deployments_deploy_requires_run",
+  sql`${t.action} <> 'deploy' OR ${t.runId} IS NOT NULL`,
+),
    check(
       "deployments_rollback_target_check",
       sql`
@@ -756,7 +765,6 @@ export const logStreams = pgTable("log_streams",{
   closedAt: timestamp("closed_at",{ withTimezone: true }),
 },(t) => [
   uniqueIndex("log_streams_job_attempt_stream_type_unique").on(t.jobAttemptId,t.streamType),
-  index("log_streams_job_attempt_id_idx",).on(t.jobAttemptId),
   check("log_streams_last_sequence_check",sql`${t.lastSequence} >= -1`),
 ])
 
@@ -776,7 +784,6 @@ export const logChunks = pgTable("log_chunks",{
 },(t) => [
   uniqueIndex("log_chunks_stream_sequence_unique").on(t.logStreamId,t.sequence),
   uniqueIndex("log_chunks_s3_key_unique").on(t.s3Key),
-  index("log_chunks_stream_idx").on(t.logStreamId),
   check("log_chunks_sequence_check",sql`${t.sequence} >= 0`),
   check("log_chunks_size_check",sql`${t.sizeInBytes} >= 0`),
   check("log_chunks_line_count_check",sql`${t.lineCount} >= 0`)

@@ -1,7 +1,7 @@
 import {
   pipelineSchema,
   type ValidatedPipeline,
-} from "../../validators/pipeline/pipeline.validator.js";
+} from "../../validators/pipeline.validator.js";
 
 export type PipelineValidationResult =
   | {

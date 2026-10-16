@@ -4,7 +4,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type {
   CreateProject,
   UpdateProject,
-} from "../../validators/project/project.validator.js";
+} from "../../validators/project.validator.js";
 import { AppError } from "../../utils/app.error.js";
 
 const generateSlug = (name: string): string => {

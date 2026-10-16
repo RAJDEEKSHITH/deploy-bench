@@ -5,7 +5,7 @@ import { AppError } from "../../utils/app.error.js";
 import type {
   CreateGithubIntegration,
   UpdateGithubIntegration,
-} from "../../validators/github/github-integration.validator.js";
+} from "../../validators/github-integration.validator.js";
 import { encrypt } from "../../utils/crypto.util.js";
 
 type GithubIntegrationRow = typeof githubIntegrations.$inferSelect;
