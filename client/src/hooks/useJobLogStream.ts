@@ -149,6 +149,16 @@ export const useJobLogStream = ({
       });
     }
 
+    es.addEventListener("stream-error", (event) => {
+      const msgEvent = event as MessageEvent<string>;
+      try {
+        const parsed = JSON.parse(msgEvent.data) as { message?: string };
+        setErrorMessage(parsed.message ?? "The log stream reported an error.");
+      } catch {
+        setErrorMessage(msgEvent.data || "The log stream reported an error.");
+      }
+    });
+
     const endEvents = ["end", "complete", "completed", "done", "stream-end", "close"];
     for (const evtName of endEvents) {
       es.addEventListener(evtName, () => {
@@ -206,3 +216,5 @@ export const useJobLogStream = ({
     clearLogs,
   };
 };
+
+

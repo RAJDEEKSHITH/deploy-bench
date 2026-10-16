@@ -1,7 +1,6 @@
-import crypto from "node:crypto";
+import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import yaml from "yaml";
 
 import { db } from "../db/index.js";
 import {
@@ -11,115 +10,25 @@ import {
   jobAttempts,
   jobDependencies,
   jobs,
-  outboxMessages,
   pipelineVersions,
   projects,
   runs,
 } from "../db/schema.js";
-import { QUEUE_NAMES } from "../queues/queue-names.js";
 import { AppError } from "../utils/app.error.js";
 import type {
   ProjectRunsParams,
   RunIdParams,
   TriggerManualRunInput,
 } from "../validators/run.validator.js";
-
-const DEFAULT_PIPELINE_YAML = `version: 1
-jobs:
-  build:
-    name: Build & Test
-    image: node:20-alpine
-    timeoutSeconds: 600
-    maxAttempts: 1
-    steps:
-      - name: Check environment
-        run: node -v && npm -v
-      - name: Run build check
-        run: echo "Build succeeded"
-`;
-
-type ParsedJobSpec = {
-  key: string;
-  name: string;
-  dependsOn: string[];
-  allowFailure: boolean;
-  timeoutSeconds: number;
-  maxAttempts: number;
-  definition: Record<string, unknown>;
-};
-
-const extractJobsFromNormalizedYaml = (
-  normalized: Record<string, unknown>,
-): ParsedJobSpec[] => {
-  const rawJobs = normalized.jobs;
-  const parsedJobs: ParsedJobSpec[] = [];
-
-  if (Array.isArray(rawJobs)) {
-    for (const item of rawJobs) {
-      if (item && typeof item === "object" && !Array.isArray(item)) {
-        const record = item as Record<string, unknown>;
-        const key = String(record.key ?? record.id ?? record.name ?? "").trim();
-        if (!key) continue;
-        const name = String(record.name ?? key).trim();
-        const dependsOn = Array.isArray(record.dependsOn)
-          ? record.dependsOn.map((d) => String(d))
-          : Array.isArray(record.needs)
-            ? record.needs.map((d) => String(d))
-            : [];
-        parsedJobs.push({
-          key,
-          name,
-          dependsOn,
-          allowFailure: Boolean(record.allowFailure ?? false),
-          timeoutSeconds: Number(record.timeoutSeconds ?? 3600),
-          maxAttempts: Math.min(5, Math.max(1, Number(record.maxAttempts ?? 1))),
-          definition: record,
-        });
-      }
-    }
-  } else if (rawJobs && typeof rawJobs === "object") {
-    for (const [key, value] of Object.entries(rawJobs as Record<string, unknown>)) {
-      const record =
-        value && typeof value === "object" && !Array.isArray(value)
-          ? (value as Record<string, unknown>)
-          : {};
-      const name = String(record.name ?? key).trim();
-      const dependsOn = Array.isArray(record.dependsOn)
-        ? record.dependsOn.map((d) => String(d))
-        : Array.isArray(record.needs)
-          ? record.needs.map((d) => String(d))
-          : [];
-      parsedJobs.push({
-        key,
-        name,
-        dependsOn,
-        allowFailure: Boolean(record.allowFailure ?? false),
-        timeoutSeconds: Number(record.timeoutSeconds ?? 3600),
-        maxAttempts: Math.min(5, Math.max(1, Number(record.maxAttempts ?? 1))),
-        definition: { key, ...record },
-      });
-    }
-  }
-
-  if (parsedJobs.length === 0) {
-    parsedJobs.push({
-      key: "build",
-      name: "Build & Test",
-      dependsOn: [],
-      allowFailure: false,
-      timeoutSeconds: 600,
-      maxAttempts: 1,
-      definition: {
-        key: "build",
-        name: "Build & Test",
-        image: "node:20-alpine",
-        steps: [{ name: "Build", run: "echo 'Running default pipeline job'" }],
-      },
-    });
-  }
-
-  return parsedJobs;
-};
+import {
+  processPipelineVersion,
+  processRawPipelineVersion,
+  type ProcessPipelineVersionResult,
+} from "../services/pipeline/pipeline-version.service.js";
+import { getGithubAccessTokenForProject } from "../services/github/github-access-token.service.js";
+import { createRun } from "../services/runs/run.service.js";
+import { createJobsForRun } from "../services/jobs/job.service.js";
+import { advanceRun } from "../services/runs/run-orchestrator.service.js";
 
 const verifyProjectAccess = async (projectId: string, userId: string) => {
   const [project] = await db
@@ -205,187 +114,78 @@ export const triggerManualRun = async (
 ) => {
   try {
     const project = await verifyProjectAccess(req.params.projectId, req.user!.id);
-
     const branch = req.body.branch?.trim() || project.defaultBranch;
 
-    let commitSha = req.body.commitSha?.trim();
+    let commitSha = req.body.commitSha?.trim().toLowerCase();
     if (!commitSha) {
       const [branchHead] = await db
-        .select()
+        .select({ commitSha: branchHeads.commitSha, isDeleted: branchHeads.isDeleted })
         .from(branchHeads)
-        .where(
-          and(
-            eq(branchHeads.projectId, project.id),
-            eq(branchHeads.branch, branch),
-          ),
-        )
+        .where(and(eq(branchHeads.projectId, project.id), eq(branchHeads.branch, branch)))
         .limit(1);
-
-      commitSha =
-        branchHead?.commitSha ??
-        crypto.createHash("sha1").update(`${project.id}:${branch}:${Date.now()}`).digest("hex");
-    }
-
-    const rawYaml = req.body.rawYaml?.trim() || DEFAULT_PIPELINE_YAML;
-    let parsedYamlObject: Record<string, unknown>;
-    try {
-      const parsed = yaml.parse(rawYaml);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Pipeline YAML must evaluate to an object");
-      }
-      parsedYamlObject = parsed as Record<string, unknown>;
-    } catch (err) {
-      throw new AppError(
-        err instanceof Error ? `Invalid pipeline YAML: ${err.message}` : "Invalid pipeline YAML",
-        400,
-      );
-    }
-
-    const configHash = crypto.createHash("sha256").update(rawYaml).digest("hex");
-
-    const createdRun = await db.transaction(async (tx) => {
-      const [existingVersion] = await tx
-        .select()
-        .from(pipelineVersions)
-        .where(
-          and(
-            eq(pipelineVersions.projectId, project.id),
-            eq(pipelineVersions.commitSha, commitSha),
-            eq(pipelineVersions.path, project.pipelinePath),
-          ),
-        )
-        .limit(1);
-
-      let pipelineVersion = existingVersion;
-
-      if (!pipelineVersion) {
-        const [insertedVersion] = await tx
-          .insert(pipelineVersions)
-          .values({
-            projectId: project.id,
-            path: project.pipelinePath,
-            configHash,
-            commitSha,
-            rawYaml,
-            normalizedYaml: parsedYamlObject,
-            validationStatus: "valid",
-            validationError: null,
-          })
-          .returning();
-
-        if (!insertedVersion) {
-          throw new AppError("Failed to create pipeline version", 500);
-        }
-        pipelineVersion = insertedVersion;
-      } else if (pipelineVersion.validationStatus !== "valid" || !pipelineVersion.normalizedYaml) {
+      if (!branchHead || branchHead.isDeleted) {
         throw new AppError(
-          `Pipeline version for commit ${commitSha} is invalid: ${pipelineVersion.validationError ?? "unknown error"}`,
+          `No observed commit exists for branch "${branch}". Push that branch or provide a full commit SHA.`,
           409,
         );
       }
+      commitSha = branchHead.commitSha.toLowerCase();
+    }
 
-      const [run] = await tx
-        .insert(runs)
-        .values({
-          projectId: project.id,
-          pipelineVersionId: pipelineVersion.id,
-          commitSha,
-          branch,
-          status: "queued",
-          trigger: "manual",
-        })
-        .returning();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commitSha)) {
+      throw new AppError("Commit SHA must be a full 40- or 64-character hexadecimal SHA", 400);
+    }
 
-      if (!run) {
-        throw new AppError("Failed to create run", 500);
-      }
+    let pipeline: ProcessPipelineVersionResult;
+    if (req.body.rawYaml !== undefined) {
+      const rawYaml = req.body.rawYaml;
+      const hash = createHash("sha256").update(rawYaml, "utf8").digest("hex");
+      // Keep custom/manual pipeline definitions separate from the committed pipeline
+      // version for this exact commit. A manual config is still immutable/auditable.
+      pipeline = await processRawPipelineVersion({
+        projectId: project.id,
+        commitSha,
+        pipelinePath: `.cicd/manual-${hash.slice(0, 32)}.yaml`,
+        rawYaml,
+      });
+    } else {
+      pipeline = await processPipelineVersion({
+        projectId: project.id,
+        commitSha,
+        pipelinePath: project.pipelinePath,
+        repositoryUrl: project.repositoryUrl,
+        accessToken: await getGithubAccessTokenForProject(project.id),
+      });
+    }
 
-      const jobSpecs = extractJobsFromNormalizedYaml(
-        pipelineVersion.normalizedYaml ?? parsedYamlObject,
-      );
-
-      const insertedJobsByKey = new Map<string, typeof jobs.$inferSelect>();
-
-      for (const spec of jobSpecs) {
-        const isRootJob = spec.dependsOn.length === 0;
-        const [insertedJob] = await tx
-          .insert(jobs)
-          .values({
-            runId: run.id,
-            key: spec.key,
-            name: spec.name,
-            definition: spec.definition,
-            status: isRootJob ? "queued" : "blocked",
-            allowFailure: spec.allowFailure,
-            timeoutSeconds: spec.timeoutSeconds,
-            maxAttempts: spec.maxAttempts,
-          })
-          .returning();
-
-        if (!insertedJob) {
-          throw new AppError(`Failed to create job ${spec.key}`, 500);
-        }
-
-        insertedJobsByKey.set(spec.key, insertedJob);
-      }
-
-      for (const spec of jobSpecs) {
-        const currentJob = insertedJobsByKey.get(spec.key);
-        if (!currentJob) continue;
-
-        for (const depKey of spec.dependsOn) {
-          const depJob = insertedJobsByKey.get(depKey);
-          if (!depJob || depJob.id === currentJob.id) continue;
-
-          await tx.insert(jobDependencies).values({
-            runId: run.id,
-            jobId: currentJob.id,
-            dependsOnJobId: depJob.id,
-          });
-        }
-      }
-
-      for (const spec of jobSpecs) {
-        if (spec.dependsOn.length > 0) continue;
-        const rootJob = insertedJobsByKey.get(spec.key);
-        if (!rootJob) continue;
-
-        const [attempt] = await tx
-          .insert(jobAttempts)
-          .values({
-            jobId: rootJob.id,
-            attemptNumber: 1,
-            status: "queued",
-            queueName: QUEUE_NAMES.jobAttempt,
-          })
-          .returning();
-
-        if (attempt) {
-          await tx.insert(outboxMessages).values({
-            messageType: "job-attempt.queued",
-            aggregateType: "job_attempt",
-            aggregateId: attempt.id,
-            dedupeKey: `job-attempt.queued:${attempt.id}`,
-            payload: {
-              jobAttemptId: attempt.id,
-              jobId: rootJob.id,
-              runId: run.id,
-            },
-            queueName: QUEUE_NAMES.jobAttempt,
-            status: "pending",
-          });
-        }
-      }
-
-      return run;
+    const created = await createRun({
+      projectId: project.id,
+      pipelineVersionId: pipeline.pipelineVersionId,
+      commitSha,
+      branch,
+      trigger: "manual",
     });
 
+    if (pipeline.validationStatus === "invalid") {
+      await db.update(runs).set({
+        status: "failed",
+        errorCode: "PIPELINE_INVALID",
+        errorMessage: pipeline.validationError ?? "Pipeline validation failed",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+      }).where(and(eq(runs.id, created.runId), eq(runs.status, "queued")));
+    } else {
+      await createJobsForRun(created.runId);
+      await advanceRun(created.runId);
+    }
+
+    const [run] = await db.select().from(runs).where(eq(runs.id, created.runId)).limit(1);
     return res.status(201).json({
       success: true,
-      message: "Run triggered successfully",
-      data: {
-        run: createdRun,
-      },
+      message: pipeline.validationStatus === "invalid"
+        ? "Run created but failed pipeline validation"
+        : "Run triggered successfully",
+      data: { run, validationError: pipeline.validationError },
     });
   } catch (error) {
     next(error);
@@ -542,115 +342,35 @@ export const retryRun = async (
 ) => {
   try {
     const { run } = await verifyRunAccess(req.params.runId, req.user!.id);
-
     const [pipelineVersion] = await db
       .select()
       .from(pipelineVersions)
       .where(eq(pipelineVersions.id, run.pipelineVersionId))
       .limit(1);
 
-    if (!pipelineVersion || !pipelineVersion.normalizedYaml) {
+    if (
+      !pipelineVersion ||
+      pipelineVersion.validationStatus !== "valid" ||
+      !pipelineVersion.normalizedYaml
+    ) {
       throw new AppError("Pipeline version not found or invalid for retry", 409);
     }
 
-    const retriedRun = await db.transaction(async (tx) => {
-      const [newRun] = await tx
-        .insert(runs)
-        .values({
-          projectId: run.projectId,
-          pipelineVersionId: run.pipelineVersionId,
-          commitSha: run.commitSha,
-          branch: run.branch,
-          status: "queued",
-          trigger: "retry",
-        })
-        .returning();
-
-      if (!newRun) {
-        throw new AppError("Failed to create retry run", 500);
-      }
-
-      const jobSpecs = extractJobsFromNormalizedYaml(pipelineVersion.normalizedYaml!);
-      const insertedJobsByKey = new Map<string, typeof jobs.$inferSelect>();
-
-      for (const spec of jobSpecs) {
-        const isRootJob = spec.dependsOn.length === 0;
-        const [insertedJob] = await tx
-          .insert(jobs)
-          .values({
-            runId: newRun.id,
-            key: spec.key,
-            name: spec.name,
-            definition: spec.definition,
-            status: isRootJob ? "queued" : "blocked",
-            allowFailure: spec.allowFailure,
-            timeoutSeconds: spec.timeoutSeconds,
-            maxAttempts: spec.maxAttempts,
-          })
-          .returning();
-
-        if (insertedJob) {
-          insertedJobsByKey.set(spec.key, insertedJob);
-        }
-      }
-
-      for (const spec of jobSpecs) {
-        const currentJob = insertedJobsByKey.get(spec.key);
-        if (!currentJob) continue;
-
-        for (const depKey of spec.dependsOn) {
-          const depJob = insertedJobsByKey.get(depKey);
-          if (!depJob || depJob.id === currentJob.id) continue;
-
-          await tx.insert(jobDependencies).values({
-            runId: newRun.id,
-            jobId: currentJob.id,
-            dependsOnJobId: depJob.id,
-          });
-        }
-      }
-
-      for (const spec of jobSpecs) {
-        if (spec.dependsOn.length > 0) continue;
-        const rootJob = insertedJobsByKey.get(spec.key);
-        if (!rootJob) continue;
-
-        const [attempt] = await tx
-          .insert(jobAttempts)
-          .values({
-            jobId: rootJob.id,
-            attemptNumber: 1,
-            status: "queued",
-            queueName: QUEUE_NAMES.jobAttempt,
-          })
-          .returning();
-
-        if (attempt) {
-          await tx.insert(outboxMessages).values({
-            messageType: "job-attempt.queued",
-            aggregateType: "job_attempt",
-            aggregateId: attempt.id,
-            dedupeKey: `job-attempt.queued:${attempt.id}`,
-            payload: {
-              jobAttemptId: attempt.id,
-              jobId: rootJob.id,
-              runId: newRun.id,
-            },
-            queueName: QUEUE_NAMES.jobAttempt,
-            status: "pending",
-          });
-        }
-      }
-
-      return newRun;
+    const created = await createRun({
+      projectId: run.projectId,
+      pipelineVersionId: pipelineVersion.id,
+      commitSha: run.commitSha,
+      branch: run.branch,
+      trigger: "retry",
     });
+    await createJobsForRun(created.runId);
+    await advanceRun(created.runId);
 
+    const [retriedRun] = await db.select().from(runs).where(eq(runs.id, created.runId)).limit(1);
     return res.status(201).json({
       success: true,
       message: "Run retry queued successfully",
-      data: {
-        run: retriedRun,
-      },
+      data: { run: retriedRun },
     });
   } catch (error) {
     next(error);

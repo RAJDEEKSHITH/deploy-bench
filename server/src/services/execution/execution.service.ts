@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { env } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import {
   jobAttempts,
@@ -7,6 +8,7 @@ import {
   runs,
 } from "../../db/schema.js";
 import { AppError } from "../../utils/app.error.js";
+import { getGithubAccessTokenForProject } from "../github/github-access-token.service.js";
 import {
   withRepositoryAtCommit,
 } from "../github/github-repository.service.js";
@@ -15,10 +17,19 @@ import {
   executeCommands,
   removeJobContainer,
 } from "./docker.service.js";
+import { appendLogChunk } from "../logs/log-chunk.service.js";
+import {
+  closeLogStream,
+  getOrCreateLogStream,
+  type LogStreamType,
+} from "../logs/log-stream.service.js";
 
 type NormalizedJobDefinition = {
   commands: string[];
 };
+
+const LOG_STREAM_TYPES = ["stdout", "stderr", "system"] as const;
+type ExecutionLogStreamType = (typeof LOG_STREAM_TYPES)[number];
 
 const getCommands = (
   definition: unknown,
@@ -78,7 +89,7 @@ type AttemptOutcome = {
     | "infrastructure"
     | "timeout"
     | "authorization"
-    | "canceled"
+    | "cancelled"
     | "unknown"
     | null;
   retryable: boolean;
@@ -233,6 +244,7 @@ export const executeJobAttempt = async ({
       maxAttempts: jobs.maxAttempts,
 
       runId: runs.id,
+      projectId: runs.projectId,
       commitSha: runs.commitSha,
 
       repositoryUrl: projects.repositoryUrl,
@@ -271,7 +283,7 @@ export const executeJobAttempt = async ({
     };
   }
 
-  if (context.jobStatus !== "queued") {
+  if (context.jobStatus !== "queued" && context.jobStatus !== "running") {
     return {
       status: "ignored",
       attemptId,
@@ -315,20 +327,68 @@ export const executeJobAttempt = async ({
   }
 
   let containerId: string | undefined;
+  const logStreamIds: Partial<Record<LogStreamType, string>> = {};
+  let logTerminalStatus: "completed" | "failed" = "failed";
+
+  const persistLog = async (
+    streamType: ExecutionLogStreamType,
+    data: Buffer | string,
+  ): Promise<void> => {
+    const streamId = logStreamIds[streamType];
+    if (!streamId) {
+      throw new AppError(`Log stream ${streamType} has not been initialized`, 500);
+    }
+
+    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+    if (buffer.length === 0) return;
+
+    const timestamp = new Date();
+    await appendLogChunk({
+      streamId,
+      data: buffer,
+      firstTimestamp: timestamp,
+      lastTimestamp: timestamp,
+    });
+  };
 
   try {
+    for (const streamType of LOG_STREAM_TYPES) {
+      const stream = await getOrCreateLogStream({
+        jobAttemptId: attemptId,
+        streamType,
+        s3Bucket: env.S3_LOGS_BUCKET,
+      });
+      logStreamIds[streamType] = stream.id;
+    }
+
+    await persistLog(
+      "system",
+      `Attempt #${context.attemptNumber} started. Preparing commit ${context.commitSha}.\n`,
+    );
+
     await withRepositoryAtCommit(
       {
         repositoryUrl: context.repositoryUrl,
         commitSha: context.commitSha,
+        accessToken: await getGithubAccessTokenForProject(context.projectId),
         checkout: true,
       },
       async (workspace) => {
+        await persistLog(
+          "system",
+          `Repository checkout is ready at ${context.commitSha}.\n`,
+        );
+
         const container = await createJobContainer(
           workspace.path,
         );
 
         containerId = container.id;
+
+        await persistLog(
+          "system",
+          `Created Docker container. Executing ${commands.length} command(s).\n`,
+        );
 
         await db
           .update(jobAttempts)
@@ -342,9 +402,14 @@ export const executeJobAttempt = async ({
           containerId,
           commands,
           context.timeoutSeconds,
+          {
+            onStdout: (chunk) => persistLog("stdout", chunk),
+            onStderr: (chunk) => persistLog("stderr", chunk),
+          },
         );
 
         if (result.timedOut) {
+          await persistLog("system", "Job command execution timed out.\n");
           const message = failureMessage(
             result.stdout,
             result.stderr,
@@ -369,6 +434,10 @@ export const executeJobAttempt = async ({
         }
 
         if (!result.success) {
+          await persistLog(
+            "system",
+            `Job command failed with exit code ${result.exitCode ?? "unknown"}.\n`,
+          );
           const message = failureMessage(
             result.stdout,
             result.stderr,
@@ -392,6 +461,7 @@ export const executeJobAttempt = async ({
           return;
         }
 
+        await persistLog("system", "All commands completed successfully.\n");
         await finishAttempt(
           attemptId,
           context.jobId,
@@ -425,6 +495,7 @@ export const executeJobAttempt = async ({
     }
 
     if (finalAttempt.status === "success") {
+      logTerminalStatus = "completed";
       return {
         status: "success",
         attemptId,
@@ -450,6 +521,12 @@ export const executeJobAttempt = async ({
       error instanceof Error
         ? error.message.slice(0, 2_000)
         : "Job execution failed";
+
+    try {
+      await persistLog("system", `Execution infrastructure error: ${message}\n`);
+    } catch (logError: unknown) {
+      console.error("Failed to persist execution error to job logs", logError);
+    }
 
     /*
      * Docker/repository failures are infrastructure failures and can
@@ -477,8 +554,27 @@ export const executeJobAttempt = async ({
       reason: message,
     };
   } finally {
+    const closeResults = await Promise.allSettled(
+      Object.values(logStreamIds)
+        .filter((streamId): streamId is string => typeof streamId === "string")
+        .map((streamId) =>
+          closeLogStream({
+            streamId,
+            status: logTerminalStatus,
+          }),
+        ),
+    );
+
+    for (const result of closeResults) {
+      if (result.status === "rejected") {
+        console.error("Failed to close a job log stream", result.reason);
+      }
+    }
+
     if (containerId) {
       await removeJobContainer(containerId);
     }
   }
 };
+
+

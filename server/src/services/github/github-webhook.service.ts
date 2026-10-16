@@ -5,10 +5,17 @@ import {
   githubIntegrations,
   outboxMessages,
   projects,
+  runs,
   webhookDeliveries,
 } from "../../db/schema.js";
 import { AppError } from "../../utils/app.error.js";
+import { JOB_NAMES, QUEUE_NAMES } from "../../queues/queue-names.js";
 import { decrypt, verifyGithubSignature } from "../../utils/crypto.util.js";
+import { getGithubAccessTokenForProject } from "./github-access-token.service.js";
+import { processPipelineVersion } from "../pipeline/pipeline-version.service.js";
+import { createRun } from "../runs/run.service.js";
+import { createJobsForRun } from "../jobs/job.service.js";
+import { advanceRun } from "../runs/run-orchestrator.service.js";
 
 /* -------------------------------------------------------------------------- */
 /* Types + constants                                                          */
@@ -17,7 +24,7 @@ import { decrypt, verifyGithubSignature } from "../../utils/crypto.util.js";
 type WebhookStatus = (typeof webhookDeliveries.$inferSelect)["status"];
 
 /** Statuses a worker may (re)process. `queued` is set once the outbox publishes. */
-const CLAIMABLE_STATUSES: WebhookStatus[] = ["received", "queued", "failed"];
+const CLAIMABLE_STATUSES: WebhookStatus[] = ["received", "queued", "processing", "failed"];
 
 const BRANCH_REF_PREFIX = "refs/heads/";
 const MAX_BRANCH_LENGTH = 128; // branch_heads.branch
@@ -161,7 +168,6 @@ export const ingestGithubWebhook = async ({
         ref: push.ref,
         isForced: push.forced,
         isDeleted: push.deleted,
-        isSignatureValid: true,
         payload,
         beforeSha: push.before.toLowerCase(),
         afterSha: push.after.toLowerCase(),
@@ -190,12 +196,12 @@ export const ingestGithubWebhook = async ({
     }
 
     await tx.insert(outboxMessages).values({
-      messageType: "github.webhook.received",
+      messageType: JOB_NAMES.githubWebhook,
       aggregateType: "webhook_delivery",
       aggregateId: delivery.id,
       dedupeKey: `github:webhook:${integration.id}:${githubDeliveryId}`,
       payload: { webhookDeliveryId: delivery.id },
-      queueName: "webhook",
+      queueName: QUEUE_NAMES.webhook,
     });
 
     return { status: "accepted", webhookDeliveryId: delivery.id, duplicate: false };
@@ -222,7 +228,6 @@ const getWebhookDelivery = async (webhookDeliveryId: string) => {
       beforeSha: webhookDeliveries.beforeSha,
       afterSha: webhookDeliveries.afterSha,
       isDeleted: webhookDeliveries.isDeleted,
-      isSignatureValid: webhookDeliveries.isSignatureValid,
       payload: webhookDeliveries.payload,
       receivedAt: webhookDeliveries.receivedAt,
     })
@@ -261,9 +266,6 @@ const getPayloadRepositoryFullName = (payload: Record<string, unknown>): string 
 const resolveBranchUpdate = (
   delivery: StoredDelivery,
 ): { branch: string; commitSha: string } | null => {
-  if (!delivery.isSignatureValid) {
-    throw new AppError("Unsigned webhook cannot be processed", 400);
-  }
 
   if (delivery.eventName !== "push") return null;
 
@@ -317,12 +319,13 @@ const markDeliveryFailed = async (webhookDeliveryId: string, error: unknown): Pr
       lastError: message.slice(0, 2_000),
       attemptCount: sql`${webhookDeliveries.attemptCount} + 1`,
       lastAttemptAt: now,
+      nextAttemptAt: now,
       updatedAt: now,
     })
     .where(
       and(
         eq(webhookDeliveries.id, webhookDeliveryId),
-        inArray(webhookDeliveries.status, CLAIMABLE_STATUSES),
+        inArray(webhookDeliveries.status, ["received", "queued", "processing", "failed"]),
       ),
     );
 };
@@ -330,80 +333,119 @@ const markDeliveryFailed = async (webhookDeliveryId: string, error: unknown): Pr
 /**
  * Stage 11: apply a push delivery to branch_heads. Idempotent.
  *
- * - The claim UPDATE and the branch_heads upsert are one transaction, so a
- *   duplicate BullMQ job blocks on the row lock, then sees `processed` and no-ops.
- * - branch_heads only moves forward (by receivedAt), so a late or redelivered
- *   older push can never overwrite a newer head.
- * - AppErrors with 4xx are permanent: have the BullMQ worker convert them to
- *   UnrecoverableError so they are not retried.
+ * The handler is idempotent by delivery ID and by the unique run/webhook-delivery
+ * relationship. branch_heads only moves forward by receivedAt, so a delayed
+ * older delivery cannot replace a newer observed head. A short processing
+ * lease permits retry/recovery after an interrupted worker.
  */
 export const processGithubWebhookDelivery = async (webhookDeliveryId: string): Promise<void> => {
   const delivery = await getWebhookDelivery(webhookDeliveryId);
-
-  // Project/integration deleted after the message was created.
   if (!delivery) return;
-
   if (delivery.status === "processed" || delivery.status === "ignored") return;
 
   try {
     const update = resolveBranchUpdate(delivery);
-
     if (!update) {
       await markDeliveryIgnored(delivery.id);
       return;
     }
 
-    await db.transaction(async (tx) => {
+    // Claim this delivery under a row lock. A short lease allows recovery if a
+    // worker crashes after claiming; duplicate BullMQ deliveries become no-ops.
+    const claim = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ status: webhookDeliveries.status })
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.id, delivery.id))
+        .for("update")
+        .limit(1);
+
+      if (!current || current.status === "processed" || current.status === "ignored") return false;
+
       const now = new Date();
+      await tx.update(webhookDeliveries).set({
+        status: "processing",
+        nextAttemptAt: new Date(now.getTime() + 2 * 60_000),
+        lastAttemptAt: now,
+        attemptCount: sql`${webhookDeliveries.attemptCount} + 1`,
+        lastError: null,
+        updatedAt: now,
+      }).where(eq(webhookDeliveries.id, delivery.id));
 
-      const [claimed] = await tx
-        .update(webhookDeliveries)
-        .set({
-          status: "processed",
-          processedAt: now,
-          nextAttemptAt: null,
-          lastError: null,
-          attemptCount: sql`${webhookDeliveries.attemptCount} + 1`,
-          lastAttemptAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(webhookDeliveries.id, delivery.id),
-            inArray(webhookDeliveries.status, CLAIMABLE_STATUSES),
-          ),
-        )
-        .returning({ id: webhookDeliveries.id });
-
-      // Another worker already finished this delivery.
-      if (!claimed) return;
-
-      await tx
-        .insert(branchHeads)
-        .values({
-          projectId: delivery.projectId,
-          branch: update.branch,
+      await tx.insert(branchHeads).values({
+        projectId: delivery.projectId,
+        branch: update.branch,
+        commitSha: update.commitSha,
+        isDeleted: delivery.isDeleted,
+        sourceWebhookDeliveryId: delivery.id,
+        lastObservedAt: delivery.receivedAt,
+        updatedAt: now,
+      }).onConflictDoUpdate({
+        target: [branchHeads.projectId, branchHeads.branch],
+        set: {
           commitSha: update.commitSha,
           isDeleted: delivery.isDeleted,
           sourceWebhookDeliveryId: delivery.id,
           lastObservedAt: delivery.receivedAt,
           updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [branchHeads.projectId, branchHeads.branch],
-          set: {
-            commitSha: update.commitSha,
-            isDeleted: delivery.isDeleted,
-            sourceWebhookDeliveryId: delivery.id,
-            lastObservedAt: delivery.receivedAt,
-            updatedAt: now,
-          },
-          // Never let an older delivery overwrite a newer branch head.
-          setWhere: lte(branchHeads.lastObservedAt, delivery.receivedAt),
-        });
+        },
+        // A late push must not replace the currently observed branch head.
+        setWhere: lte(branchHeads.lastObservedAt, delivery.receivedAt),
+      });
+      return true;
     });
+
+    if (!claim) return;
+
+    // A deleted branch has an all-zero `after` SHA. Persist the deleted head,
+    // but never attempt to fetch a pipeline or create a run for it.
+    if (delivery.isDeleted) {
+      await db.update(webhookDeliveries).set({
+        status: "processed", processedAt: new Date(), nextAttemptAt: null,
+        lastError: null, updatedAt: new Date(),
+      }).where(eq(webhookDeliveries.id, delivery.id));
+      return;
+    }
+
+    const accessToken = await getGithubAccessTokenForProject(delivery.projectId);
+    const pipeline = await processPipelineVersion({
+      projectId: delivery.projectId,
+      commitSha: update.commitSha,
+      pipelinePath: delivery.pipelinePath,
+      repositoryUrl: delivery.repositoryUrl,
+      accessToken,
+    });
+
+    const run = await createRun({
+      projectId: delivery.projectId,
+      pipelineVersionId: pipeline.pipelineVersionId,
+      commitSha: update.commitSha,
+      branch: update.branch,
+      trigger: "push",
+      webhookDeliveryId: delivery.id,
+    });
+
+    if (pipeline.validationStatus === "invalid") {
+      // Record an invalid pipeline as an explicit failed run. Never execute a
+      // built-in/default pipeline in place of the user's committed YAML.
+      await db.update(runs).set({
+        status: "failed",
+        errorCode: "PIPELINE_INVALID",
+        errorMessage: pipeline.validationError ?? "Pipeline validation failed",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+      }).where(and(eq(runs.id, run.runId), eq(runs.status, "queued")));
+    } else {
+      await createJobsForRun(run.runId);
+      await advanceRun(run.runId);
+    }
+
+    await db.update(webhookDeliveries).set({
+      status: "processed", processedAt: new Date(), nextAttemptAt: null,
+      lastError: null, updatedAt: new Date(),
+    }).where(eq(webhookDeliveries.id, delivery.id));
   } catch (error) {
-    // The transaction has rolled back; record the failure separately.
+    // Reset the processing lease to failed so BullMQ retries can reclaim it.
     await markDeliveryFailed(delivery.id, error);
     throw error;
   }

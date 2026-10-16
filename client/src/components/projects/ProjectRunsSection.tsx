@@ -132,7 +132,7 @@ export const ProjectRunsSection = ({
                   id="run-yaml"
                   value={rawYaml}
                   onChange={(e) => setRawYaml(e.target.value)}
-                  placeholder={`version: 1\njobs:\n  build:\n    name: Build & Test\n    steps:\n      - name: Test\n        run: npm test`}
+                  placeholder={`jobs:\n  build:\n    name: Build & Test\n    commands:\n      - npm ci\n      - npm run build`}
                   className="min-h-32 font-mono text-xs"
                 />
               </div>

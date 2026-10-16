@@ -17,6 +17,7 @@ import {
   listDeploymentHistory,
   updateEnvironment,
 } from "../services/deployments/deployment.service.js";
+import { JOB_NAMES, QUEUE_NAMES } from "../queues/queue-names.js";
 import { AppError } from "../utils/app.error.js";
 import type {
   CreateDeploymentBody,
@@ -443,14 +444,14 @@ export const rollbackEnvironmentDeployment = async (
       }
 
       await tx.insert(outboxMessages).values({
-        messageType: "deployment.requested",
+        messageType: JOB_NAMES.deployment,
         aggregateType: "deployment",
         aggregateId: created.id,
         dedupeKey: `deployment.requested:${created.id}`,
         payload: {
           deploymentId: created.id,
         },
-        queueName: "deployment",
+        queueName: QUEUE_NAMES.deployment,
         status: "pending",
       });
 
@@ -468,3 +469,5 @@ export const rollbackEnvironmentDeployment = async (
     next(error);
   }
 };
+
+

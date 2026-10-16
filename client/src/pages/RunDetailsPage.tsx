@@ -66,8 +66,15 @@ const RunDetailsPage = () => {
   const jobs = data?.jobs ?? [];
 
   useEffect(() => {
-    if (!selectedJobId && jobs.length > 0 && jobs[0]) {
-      setSelectedJobId(jobs[0].id);
+    if (jobs.length === 0) {
+      if (selectedJobId !== null) setSelectedJobId(null);
+      return;
+    }
+
+    // The router can reuse this page when navigating between runs. If the
+    // selected job belongs to the previous run, select a job from this run.
+    if (!selectedJobId || !jobs.some((job) => job.id === selectedJobId)) {
+      setSelectedJobId(jobs[0]!.id);
     }
   }, [jobs, selectedJobId]);
 
@@ -419,3 +426,5 @@ const RunDetailsPage = () => {
 };
 
 export default RunDetailsPage;
+
+

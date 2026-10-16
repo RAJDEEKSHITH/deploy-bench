@@ -16,6 +16,7 @@ import {
   projects,
   runs,
 } from "../../db/schema.js";
+import { JOB_NAMES, QUEUE_NAMES } from "../../queues/queue-names.js";
 import { AppError } from "../../utils/app.error.js";
 import { getContainerImageDigestReference } from "../container-images/container-image.service.js";
 
@@ -1047,14 +1048,14 @@ const release = await resolveDeploymentReleaseInTransaction({
         .where(eq(environments.id, environment.id));
 
       await tx.insert(outboxMessages).values({
-        messageType: "deployment.requested",
+        messageType: JOB_NAMES.deployment,
         aggregateType: "deployment",
         aggregateId: deployment.id,
         dedupeKey: `deployment.requested:${deployment.id}`,
         payload: {
           deploymentId: deployment.id,
         },
-        queueName: "deployment",
+        queueName: QUEUE_NAMES.deployment,
         status: "pending",
       });
 
@@ -1193,7 +1194,7 @@ export const requeueQueuedDeployment = async ({
     await tx
       .insert(outboxMessages)
       .values({
-        messageType: "deployment.requested",
+        messageType: JOB_NAMES.deployment,
         aggregateType: "deployment",
         aggregateId: row.deployment.id,
         dedupeKey: `deployment.recheck:${row.deployment.id}:${triggerRunId}`,
@@ -1201,7 +1202,7 @@ export const requeueQueuedDeployment = async ({
           deploymentId: row.deployment.id,
           reason: "deployment_recheck",
         },
-        queueName: "deployment",
+        queueName: QUEUE_NAMES.deployment,
         status: "pending",
       })
       .catch((error: unknown) => {
@@ -1268,3 +1269,6 @@ export const listDeploymentHistory = async ({
     .orderBy(desc(deployments.createdAt), desc(deployments.id))
     .limit(limit);
 };
+
+
+

@@ -11,6 +11,7 @@ import {
   environments,
   outboxMessages,
 } from "../../db/schema.js";
+import { JOB_NAMES, QUEUE_NAMES } from "../../queues/queue-names.js";
 import { AppError } from "../../utils/app.error.js";
 import {
   loadUsableArtifactInTransaction,
@@ -304,14 +305,14 @@ export const createRollback = async (
         .where(eq(environments.id, environment.id));
 
       await tx.insert(outboxMessages).values({
-        messageType: "deployment.requested",
+        messageType: JOB_NAMES.deployment,
         aggregateType: "deployment",
         aggregateId: rollback.id,
         dedupeKey: `deployment.requested:${rollback.id}`,
         payload: {
           deploymentId: rollback.id,
         },
-        queueName: "deployment",
+        queueName: QUEUE_NAMES.deployment,
         status: "pending",
       });
 
@@ -332,3 +333,6 @@ export const createRollback = async (
     throw error;
   }
 };
+
+
+
