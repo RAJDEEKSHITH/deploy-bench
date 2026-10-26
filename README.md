@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚀 DeployBench
+# DeployBench
 
 **A self-hosted CI/CD platform. Every job runs in an isolated Docker container, and successful builds deploy to S3 or EC2.**
 
