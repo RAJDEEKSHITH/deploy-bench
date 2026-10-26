@@ -223,7 +223,7 @@ export const environments = pgTable(
     desiredCommitSha: varchar("desired_commit_sha", { length: 128 }),
     // Actually deployed commit
     currentCommitSha: varchar("current_commit_sha", { length: 128 }),
-    currentReleaseRef: varchar("current_release_ref", { length: 128 }),
+    currentReleaseRef: varchar("current_release_ref", { length: 512 }),
     currentImageId: uuid("current_image_id").references(
       () => containerImages.id,
       { onDelete: "set null" },

@@ -21,6 +21,7 @@ const envSchema = z.object({
     }),
   AWS_ACCESS_KEY_ID: z.string().min(1, "AWS access key ID is required"),
   AWS_SECRET_ACCESS_KEY: z.string().min(1, "AWS secret access key is required"),
+  AWS_SESSION_TOKEN: z.string().trim().min(1).optional(),
 });
 
 export const env = envSchema.parse({
@@ -39,5 +40,6 @@ export const env = envSchema.parse({
   COOKIE_SECRET : process.env.COOKIE_SECRET,
   APP_ENCRYPTION_KEY : process.env.APP_ENCRYPTION_KEY,
   AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
-  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY
+  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+  AWS_SESSION_TOKEN: process.env.AWS_SESSION_TOKEN,
 });

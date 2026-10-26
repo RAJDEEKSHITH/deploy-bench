@@ -13,10 +13,10 @@ import {
 } from "@aws-sdk/client-ecr";
 import { and, eq } from "drizzle-orm";
 
-import { env } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import { containerImages, jobAttempts, jobs, runs } from "../../db/schema.js";
 import { AppError } from "../../utils/app.error.js";
+import { resolveProjectEcrCredentials } from "../deployments/deployment-credentials.service.js";
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
@@ -66,6 +66,7 @@ type ImageIdentity = {
   name: string;
   registry: string;
   registryId: string;
+  region: string;
   repository: string;
   tag: string;
   producer: ContainerImageProducer | null;
@@ -107,14 +108,6 @@ const ECR_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 const ECR_REGISTRY_PATTERN = /^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
 const ECR_REPOSITORY_PATTERN = /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$/;
 const PLATFORM_PATTERN = /^[a-z0-9]+\/[a-z0-9]+(?:\/[a-z0-9]+)?$/i;
-
-const ecrClient = new ECRClient({
-  region: env.ECR_REGION,
-  credentials: {
-    accessKeyId: env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-  },
-});
 
 /* -------------------------------------------------------------------------- */
 /* Utility functions                                                          */
@@ -192,10 +185,6 @@ const normalizeIdentity = (input: ContainerImageIdentityInput): ImageIdentity =>
     throw new AppError("Invalid ECR registry", 400);
   }
 
-  if (registryRegion !== env.ECR_REGION.toLowerCase()) {
-    throw new AppError("ECR registry region does not match the configured ECR region", 400);
-  }
-
   if (repository.length < 2 || !ECR_REPOSITORY_PATTERN.test(repository)) {
     throw new AppError("Invalid ECR repository name", 400);
   }
@@ -205,7 +194,7 @@ const normalizeIdentity = (input: ContainerImageIdentityInput): ImageIdentity =>
     jobAttemptId: requireUuid(input.producer.jobAttemptId, "producer job attempt ID"),
   };
 
-  return { runId, name, registry, registryId, repository, tag: getContainerImageTag(runId), producer };
+  return { runId, name, registry, registryId, region: registryRegion, repository, tag: getContainerImageTag(runId), producer };
 };
 
 /* -------------------------------------------------------------------------- */
@@ -252,8 +241,8 @@ const normalizeBuildOptions = async (input: BuildAndPushContainerImageInput): Pr
 /* Database                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const loadRun = async (runId: string): Promise<{ id: string; status: typeof runs.$inferSelect.status }> => {
-  const [run] = await db.select({ id: runs.id, status: runs.status }).from(runs).where(eq(runs.id, runId)).limit(1);
+const loadRun = async (runId: string): Promise<{ id: string; projectId: string; status: typeof runs.$inferSelect.status }> => {
+  const [run] = await db.select({ id: runs.id, projectId: runs.projectId, status: runs.status }).from(runs).where(eq(runs.id, runId)).limit(1);
   if (run === undefined) throw new AppError("Run not found", 404);
   return run;
 };
@@ -327,7 +316,7 @@ const persistContainerImage = async (identity: ImageIdentity, digest: string): P
 /* ECR                                                                        */
 /* -------------------------------------------------------------------------- */
 
-const assertRepositoryUsesImmutableTags = async (identity: ImageIdentity): Promise<void> => {
+const assertRepositoryUsesImmutableTags = async (identity: ImageIdentity, ecrClient: ECRClient): Promise<void> => {
   try {
     const response = await ecrClient.send(new DescribeRepositoriesCommand({
       registryId: identity.registryId,
@@ -343,7 +332,7 @@ const assertRepositoryUsesImmutableTags = async (identity: ImageIdentity): Promi
   }
 };
 
-const findDigestByTag = async (identity: ImageIdentity): Promise<string | null> => {
+const findDigestByTag = async (identity: ImageIdentity, ecrClient: ECRClient): Promise<string | null> => {
   try {
     const response = await ecrClient.send(new DescribeImagesCommand({
       registryId: identity.registryId,
@@ -364,11 +353,11 @@ const findDigestByTag = async (identity: ImageIdentity): Promise<string | null> 
   }
 };
 
-const waitForDigest = async (identity: ImageIdentity, signal?: AbortSignal): Promise<string> => {
+const waitForDigest = async (identity: ImageIdentity, ecrClient: ECRClient, signal?: AbortSignal): Promise<string> => {
   for (let attempt = 1; attempt <= DIGEST_LOOKUP_ATTEMPTS; attempt += 1) {
     if (signal?.aborted) throw new AppError("Container image build was canceled", 409);
 
-    const digest = await findDigestByTag(identity);
+    const digest = await findDigestByTag(identity, ecrClient);
     if (digest !== null) return digest;
 
     if (attempt < DIGEST_LOOKUP_ATTEMPTS) await sleep(DIGEST_LOOKUP_DELAY_MS);
@@ -443,7 +432,7 @@ const withDockerConfigDir = async <T>(operation: (dockerConfigDir: string) => Pr
   }
 };
 
-const loginDockerToEcr = async (identity: ImageIdentity, docker: DockerContext): Promise<void> => {
+const loginDockerToEcr = async (identity: ImageIdentity, ecrClient: ECRClient, docker: DockerContext): Promise<void> => {
   try {
     const response = await ecrClient.send(new GetAuthorizationTokenCommand({ registryIds: [identity.registryId] }));
     const authorization = response.authorizationData?.[0];
@@ -477,60 +466,72 @@ export const buildAndPushContainerImage = async (input: BuildAndPushContainerIma
   const identity = normalizeIdentity(input);
   const { contextDirectory, dockerfilePath, platform, timeoutMs } = await normalizeBuildOptions(input);
   const run = await loadRun(identity.runId);
+  const credentials = await resolveProjectEcrCredentials(run.projectId);
+  const ecrClient = new ECRClient({ region: identity.region, credentials });
 
-  await assertProducerBelongsToRun(identity);
-  await assertRepositoryUsesImmutableTags(identity);
+  try {
+    await assertProducerBelongsToRun(identity);
+    await assertRepositoryUsesImmutableTags(identity, ecrClient);
 
-  const existingEcrDigest = await findDigestByTag(identity);
-  const existingDbImage = await findPersistedContainerImage(identity);
+    const existingEcrDigest = await findDigestByTag(identity, ecrClient);
+    const existingDbImage = await findPersistedContainerImage(identity);
 
-  if (existingDbImage !== null) {
-    if (existingEcrDigest === null) throw new AppError("Persisted container image is missing from ECR", 409);
-    if (existingDbImage.digest !== existingEcrDigest) throw new AppError("ECR image digest differs from the persisted container image", 409);
-    return { action: "recovered", image: existingDbImage };
-  }
-
-  if (existingEcrDigest !== null) {
-    return { action: "recovered", image: await persistContainerImage(identity, existingEcrDigest) };
-  }
-
-  if (isCanceledOrSuperseded(run.status)) throw new AppError("Run is no longer active", 409);
-  if (input.signal?.aborted) throw new AppError("Container image build was canceled", 409);
-
-  const imageUri = getContainerImageUri(identity);
-
-  return withDockerConfigDir(async (dockerConfigDir): Promise<BuildAndPushContainerImageResult> => {
-    const docker: DockerContext = { timeoutMs, dockerConfigDir, signal: input.signal, onOutput: input.onOutput };
-
-    await loginDockerToEcr(identity, docker);
-
-    await runDocker([
-      "build", "--tag", imageUri, "--file", dockerfilePath,
-      ...(platform === undefined ? [] : ["--platform", platform]),
-      contextDirectory,
-    ], docker);
-
-    try {
-      await runDocker(["push", imageUri], docker);
-    } catch (pushError: unknown) {
-      if (input.signal?.aborted) throw pushError;
-      const recoveredDigest = await findDigestByTag(identity).catch(() => null);
-      if (recoveredDigest === null) throw pushError;
-      return { action: "recovered", image: await persistContainerImage(identity, recoveredDigest) };
+    if (existingDbImage !== null) {
+      if (existingEcrDigest === null) throw new AppError("Persisted container image is missing from ECR", 409);
+      if (existingDbImage.digest !== existingEcrDigest) throw new AppError("ECR image digest differs from the persisted container image", 409);
+      return { action: "recovered", image: existingDbImage };
     }
 
-    const digest = await waitForDigest(identity, input.signal);
-    return { action: "created", image: await persistContainerImage(identity, digest) };
-  });
+    if (existingEcrDigest !== null) {
+      return { action: "recovered", image: await persistContainerImage(identity, existingEcrDigest) };
+    }
+
+    if (isCanceledOrSuperseded(run.status)) throw new AppError("Run is no longer active", 409);
+    if (input.signal?.aborted) throw new AppError("Container image build was canceled", 409);
+
+    const imageUri = getContainerImageUri(identity);
+
+    return await withDockerConfigDir(async (dockerConfigDir): Promise<BuildAndPushContainerImageResult> => {
+      const docker: DockerContext = { timeoutMs, dockerConfigDir, signal: input.signal, onOutput: input.onOutput };
+
+      await loginDockerToEcr(identity, ecrClient, docker);
+
+      await runDocker([
+        "build", "--tag", imageUri, "--file", dockerfilePath,
+        ...(platform === undefined ? [] : ["--platform", platform]),
+        contextDirectory,
+      ], docker);
+
+      try {
+        await runDocker(["push", imageUri], docker);
+      } catch (pushError: unknown) {
+        if (input.signal?.aborted) throw pushError;
+        const recoveredDigest = await findDigestByTag(identity, ecrClient).catch(() => null);
+        if (recoveredDigest === null) throw pushError;
+        return { action: "recovered", image: await persistContainerImage(identity, recoveredDigest) };
+      }
+
+      const digest = await waitForDigest(identity, ecrClient, input.signal);
+      return { action: "created", image: await persistContainerImage(identity, digest) };
+    });
+  } finally {
+    ecrClient.destroy();
+  }
 };
 
 export const recoverContainerImage = async (input: RecoverContainerImageInput): Promise<RecoverContainerImageResult> => {
   const identity = normalizeIdentity(input);
-  await loadRun(identity.runId);
-  await assertProducerBelongsToRun(identity);
-  await assertRepositoryUsesImmutableTags(identity);
+  const run = await loadRun(identity.runId);
+  const credentials = await resolveProjectEcrCredentials(run.projectId);
+  const ecrClient = new ECRClient({ region: identity.region, credentials });
+  try {
+    await assertProducerBelongsToRun(identity);
+    await assertRepositoryUsesImmutableTags(identity, ecrClient);
 
-  const digest = await findDigestByTag(identity);
-  if (digest === null) return { recovered: false, image: null };
-  return { recovered: true, image: await persistContainerImage(identity, digest) };
+    const digest = await findDigestByTag(identity, ecrClient);
+    if (digest === null) return { recovered: false, image: null };
+    return { recovered: true, image: await persistContainerImage(identity, digest) };
+  } finally {
+    ecrClient.destroy();
+  }
 };

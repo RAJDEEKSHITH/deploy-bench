@@ -5,12 +5,12 @@ import {
   Loader2,
   Plus,
   Rocket,
+  Settings2,
   RotateCcw,
   Trash2,
 } from "lucide-react";
 
 import {
-  useCreateEnvironment,
   useDeleteEnvironment,
   useEnvironmentDeployments,
   useProjectEnvironments,
@@ -19,7 +19,9 @@ import {
 } from "@/hooks/useDeployments";
 import { useProjectRuns } from "@/hooks/useRuns";
 import { getApiErrorMessage } from "@/lib/api-error";
-import type { DeploymentTargetType, Environment } from "@/types/deployment";
+import EnvironmentSecretsPanel from "@/components/projects/EnvironmentSecretsPanel";
+import EnvironmentSettingsDialog from "@/components/projects/EnvironmentSettingsDialog";
+import type { Environment } from "@/types/deployment";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +57,7 @@ const EnvironmentCardItem = ({
   const deleteEnvMutation = useDeleteEnvironment(projectId);
 
   const [deployOpen, setDeployOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [releaseId, setReleaseId] = useState("");
 
@@ -202,6 +205,15 @@ const EnvironmentCardItem = ({
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 className="size-3.5" />
+            Settings
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
             disabled={rollbackMutation.isPending}
             onClick={() => rollbackMutation.mutate(undefined)}
           >
@@ -260,6 +272,18 @@ const EnvironmentCardItem = ({
           </div>
         )}
       </div>
+      <EnvironmentSecretsPanel
+        projectId={projectId}
+        environmentId={environment.id}
+        targetType={environment.targetType}
+      />
+      <EnvironmentSettingsDialog
+        projectId={projectId}
+        defaultBranch={environment.deploymentBranch}
+        environment={environment}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
     </div>
   );
 };
@@ -275,38 +299,7 @@ export const ProjectEnvironmentsSection = ({
     error,
   } = useProjectEnvironments(projectId);
 
-  const createMutation = useCreateEnvironment(projectId);
-
   const [createOpen, setCreateOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [targetType, setTargetType] =
-    useState<DeploymentTargetType>("s3");
-  const [deploymentBranch, setDeploymentBranch] =
-    useState(defaultBranch);
-  const [healthCheckUrl, setHealthCheckUrl] = useState("");
-
-  const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    try {
-      await createMutation.mutateAsync({
-        name: name.trim(),
-        slug: slug.trim().toLowerCase(),
-        targetType,
-        targetConfig: {},
-        deploymentBranch: deploymentBranch.trim(),
-        ...(targetType === "ssh_ec2" && healthCheckUrl.trim()
-          ? { healthCheckUrl: healthCheckUrl.trim() }
-          : {}),
-      });
-      setCreateOpen(false);
-      setName("");
-      setSlug("");
-      setHealthCheckUrl("");
-    } catch {
-      // Handled by toast
-    }
-  };
 
   return (
     <section className="mt-8 rounded-xl border bg-background">
@@ -321,114 +314,18 @@ export const ProjectEnvironmentsSection = ({
           </p>
         </div>
 
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogTrigger render={<Button />}>
-            <Plus className="size-4" />
-            Add environment
-          </DialogTrigger>
-
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Create environment</DialogTitle>
-              <DialogDescription>
-                Configure an S3 or SSH EC2 deployment environment for this project.
-              </DialogDescription>
-            </DialogHeader>
-
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="env-name">Environment name</Label>
-                <Input
-                  id="env-name"
-                  value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    if (!slug) {
-                      setSlug(
-                        e.target.value
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]+/g, "-")
-                          .replace(/^-|-$/g, ""),
-                      );
-                    }
-                  }}
-                  placeholder="Production"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="env-slug">Slug</Label>
-                <Input
-                  id="env-slug"
-                  value={slug}
-                  onChange={(e) => setSlug(e.target.value)}
-                  placeholder="production"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="env-target">Target type</Label>
-                <select
-                  id="env-target"
-                  value={targetType}
-                  onChange={(e) =>
-                    setTargetType(e.target.value as DeploymentTargetType)
-                  }
-                  className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm"
-                >
-                  <option value="s3">S3 (Static Frontend Artifact)</option>
-                  <option value="ssh_ec2">SSH EC2 (Container Image)</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="env-branch">Deployment branch</Label>
-                <Input
-                  id="env-branch"
-                  value={deploymentBranch}
-                  onChange={(e) => setDeploymentBranch(e.target.value)}
-                  placeholder="main"
-                  required
-                />
-              </div>
-
-              {targetType === "ssh_ec2" && (
-                <div className="space-y-2">
-                  <Label htmlFor="env-health-url">
-                    Health check URL (required for SSH EC2)
-                  </Label>
-                  <Input
-                    id="env-health-url"
-                    type="url"
-                    value={healthCheckUrl}
-                    onChange={(e) => setHealthCheckUrl(e.target.value)}
-                    placeholder="https://api.example.com/health"
-                    required
-                  />
-                </div>
-              )}
-
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setCreateOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending && (
-                    <Loader2 className="size-4 animate-spin" />
-                  )}
-                  Create environment
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <Button onClick={() => setCreateOpen(true)}>
+          <Plus className="size-4" />
+          Add environment
+        </Button>
       </div>
+
+      <EnvironmentSettingsDialog
+        projectId={projectId}
+        defaultBranch={defaultBranch}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+      />
 
       <div className="p-6">
         {isPending && (

@@ -2,9 +2,11 @@ import { UnrecoverableError, Worker } from "bullmq";
 import { closeQueues } from "./queues/queues.js";
 import { closeRedisConnections, workerRedisConnection } from "./lib/redis/redis.client.js";
 import { JOB_NAMES, QUEUE_NAMES } from "./queues/queue-names.js";
-import type { JobAttemptJobData, WebhookJobData } from "./queues/queues.js";
+import type { DeploymentJobData, JobAttemptJobData, WebhookJobData } from "./queues/queues.js";
 import { processGithubWebhookDelivery } from "./services/github/github-webhook.service.js";
+import { createDeploymentExecutor } from "./services/deployments/deployment-executor.js";
 import { processJobAttempt } from "./workers/job-attempt.worker.js";
+import { processDeploymentJob } from "./workers/deployment.worker.js";
 import { startOutboxWorker, stopOutboxWorker } from "./workers/outbox.worker.js";
 import { closeLogStorage } from "./services/logs/log-chunk.service.js";
 import { closeS3Storage } from "./storage/s3.service.js";
@@ -51,14 +53,42 @@ const jobAttemptWorker = new Worker<JobAttemptJobData>(
   { connection: workerRedisConnection, concurrency: 3 },
 );
 
-for (const [name, worker] of [["webhook", webhookWorker], ["job-attempt", jobAttemptWorker]] as const) {
+const deploymentExecutor = createDeploymentExecutor();
+const deploymentWorker = new Worker<DeploymentJobData>(
+  QUEUE_NAMES.deployment,
+  async (job) => {
+    if (job.name !== JOB_NAMES.deployment) {
+      throw new UnrecoverableError(`Unsupported deployment job name: ${job.name}`);
+    }
+    const id = job.data?.deploymentId;
+    if (typeof id !== "string" || id.length === 0) {
+      throw new UnrecoverableError("Invalid deployment queue payload");
+    }
+    try {
+      await processDeploymentJob(job, { executor: deploymentExecutor });
+    } catch (error) {
+      asWorkerError(error);
+    }
+  },
+  { connection: workerRedisConnection, concurrency: 2 },
+);
+
+for (const [name, worker] of [
+  ["webhook", webhookWorker],
+  ["job-attempt", jobAttemptWorker],
+  ["deployment", deploymentWorker],
+] as const) {
   worker.on("error", (error) => console.error(`[${name}] worker error`, error));
-  worker.on("failed", (job, error) => console.error(`[${name}] job failed`, { jobId: job?.id, name: job?.name, error }));
+  worker.on("failed", (job, error) => console.error(`[${name}] job failed`, {
+    jobId: job?.id,
+    name: job?.name,
+    error,
+  }));
   worker.on("stalled", (jobId) => console.error(`[${name}] job stalled`, jobId));
 }
 
 // The outbox is the bridge from committed PostgreSQL work to BullMQ. Without
-// this loop, webhook deliveries and job attempts remain pending in the DB.
+// this loop, webhook deliveries, job attempts, and deployments remain pending in the DB.
 void startOutboxWorker();
 
 let shuttingDown = false;
@@ -70,6 +100,7 @@ const shutdown = async (signal: string): Promise<void> => {
   await Promise.allSettled([
     webhookWorker.close(),
     jobAttemptWorker.close(),
+    deploymentWorker.close(),
     closeQueues(),
   ]);
   closeLogStorage();
