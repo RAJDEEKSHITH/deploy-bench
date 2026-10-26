@@ -1,6 +1,20 @@
 import { createHash } from "node:crypto";
 import type { ValidatedPipeline } from "../../validators/pipeline.validator.js";
 
+export type NormalizedArtifactDeclaration = {
+  name: string;
+  path: string;
+};
+
+export type NormalizedContainerImage = {
+  name: string;
+  registry: string;
+  repository: string;
+  contextPath: string;
+  dockerfilePath: string;
+  platform?: string;
+};
+
 export type NormalizedPipelineJob = {
   name: string;
   commands: string[];
@@ -8,6 +22,8 @@ export type NormalizedPipelineJob = {
   timeoutSeconds: number;
   maxAttempts: number;
   allowFailure: boolean;
+  artifacts: NormalizedArtifactDeclaration[];
+  containerImage?: NormalizedContainerImage;
 };
 
 export type NormalizedPipeline = {
@@ -24,9 +40,9 @@ const compareKeys = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 
 export const normalizePipeline = (pipeline: ValidatedPipeline): NormalizedPipelineResult => {
   const sortedJobs: [string, NormalizedPipelineJob][] = Object.entries(pipeline.jobs)
     .sort(([a], [b]) => compareKeys(a, b))
-    .map(([jobKey, job]) => [
-      jobKey,
-      {
+    .map(([jobKey, job]) => {
+      const image = job.containerImage;
+      const normalizedJob: NormalizedPipelineJob = {
         name: job.name ?? jobKey,
         // Not trimmed: trimming would change executable input.
         commands: [...job.commands],
@@ -36,8 +52,25 @@ export const normalizePipeline = (pipeline: ValidatedPipeline): NormalizedPipeli
         timeoutSeconds: job.timeoutSeconds,
         maxAttempts: job.maxAttempts,
         allowFailure: job.allowFailure,
-      },
-    ]);
+        artifacts: [...(job.artifacts ?? [])]
+          .map(({ name, path }) => ({ name, path }))
+          .sort((a, b) => compareKeys(a.name, b.name) || compareKeys(a.path, b.path)),
+        ...(image === undefined
+          ? {}
+          : {
+              containerImage: {
+                name: image.name.trim(),
+                registry: image.registry.trim().toLowerCase(),
+                repository: image.repository.trim().toLowerCase(),
+                contextPath: image.contextPath,
+                dockerfilePath: image.dockerfilePath,
+                ...(image.platform === undefined ? {} : { platform: image.platform }),
+              },
+            }),
+      };
+
+      return [jobKey, normalizedJob];
+    });
 
   const normalizedPipeline: NormalizedPipeline = { jobs: Object.fromEntries(sortedJobs) };
 

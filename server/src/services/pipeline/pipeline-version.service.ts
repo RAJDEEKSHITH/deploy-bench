@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+
 import { db } from "../../db/index.js";
 import { pipelineVersions } from "../../db/schema.js";
 import { AppError } from "../../utils/app.error.js";
@@ -9,10 +10,8 @@ import { validatePipeline } from "./pipeline-validator.service.js";
 import { normalizePipeline, type NormalizedPipeline } from "./pipeline-normalizer.service.js";
 
 const MAX_VALIDATION_ERROR_LENGTH = 2_000;
-const MAX_PIPELINE_PATH_LENGTH = 512; // pipeline_versions.path
-
-const sha256 = (value: string): string =>
-  createHash("sha256").update(value, "utf8").digest("hex");
+const MAX_PIPELINE_PATH_LENGTH = 512;
+const sha256 = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 
 export type ProcessPipelineVersionInput = {
   projectId: string;
@@ -22,13 +21,20 @@ export type ProcessPipelineVersionInput = {
   accessToken?: string | undefined;
 };
 
+export type ProcessRawPipelineVersionInput = {
+  projectId: string;
+  commitSha: string;
+  pipelinePath: string;
+  rawYaml: string;
+};
+
 export type ProcessPipelineVersionResult = {
   pipelineVersionId: string;
   validationStatus: "valid" | "invalid";
+  validationError: string | null;
   configHash: string;
 };
 
-/** What gets stored. Mirrors pipeline_versions_validation_consistency_check. */
 type PipelineOutcome =
   | {
       validationStatus: "valid";
@@ -45,10 +51,6 @@ type PipelineOutcome =
       configHash: string;
     };
 
-/**
- * Invalid pipelines still need a config_hash (NOT NULL),
- * so they get the hash of their exact raw text.
- */
 const invalidOutcome = (rawYaml: string, message: string): PipelineOutcome => ({
   validationStatus: "invalid",
   rawYaml,
@@ -62,13 +64,11 @@ const evaluatePipeline = (rawYaml: string | null, pipelinePath: string): Pipelin
     return invalidOutcome("", `Pipeline file "${pipelinePath}" was not found at this commit`);
   }
 
-  // PostgreSQL text columns cannot store NUL bytes.
   if (rawYaml.includes("\0")) {
     return invalidOutcome("", "Pipeline file must be a text file");
   }
 
   let parsed: unknown;
-
   try {
     parsed = parsePipelineYaml(rawYaml);
   } catch (error) {
@@ -80,7 +80,6 @@ const evaluatePipeline = (rawYaml: string | null, pipelinePath: string): Pipelin
   if (!validation.valid) return invalidOutcome(rawYaml, validation.error);
 
   const { normalizedPipeline, configHash } = normalizePipeline(validation.pipeline);
-
   return {
     validationStatus: "valid",
     rawYaml,
@@ -93,72 +92,117 @@ const evaluatePipeline = (rawYaml: string | null, pipelinePath: string): Pipelin
 const versionColumns = {
   id: pipelineVersions.id,
   validationStatus: pipelineVersions.validationStatus,
+  validationError: pipelineVersions.validationError,
   configHash: pipelineVersions.configHash,
 };
 
-const findPipelineVersion = async (projectId: string, commitSha: string) => {
+const findPipelineVersion = async (projectId: string, commitSha: string, pipelinePath: string) => {
   const [row] = await db
     .select(versionColumns)
     .from(pipelineVersions)
-    .where(and(eq(pipelineVersions.projectId, projectId), eq(pipelineVersions.commitSha, commitSha)))
+    .where(and(
+      eq(pipelineVersions.projectId, projectId),
+      eq(pipelineVersions.commitSha, commitSha),
+      eq(pipelineVersions.path, pipelinePath),
+    ))
     .limit(1);
-
   return row;
 };
 
 const toResult = (row: {
   id: string;
   validationStatus: "valid" | "invalid";
+  validationError: string | null;
   configHash: string;
 }): ProcessPipelineVersionResult => ({
   pipelineVersionId: row.id,
   validationStatus: row.validationStatus,
+  validationError: row.validationError,
   configHash: row.configHash,
 });
 
-/**
- * Reads, parses, validates and normalizes the pipeline at an exact commit,
- * then stores one immutable pipeline_versions row per (project, commit).
- *
- * Idempotent: webhook redelivery / job retry returns the existing row
- * without touching git. Rows are never updated.
- */
-export const processPipelineVersion = async ({
+const persistPipelineVersion = async ({
   projectId,
   commitSha: rawCommitSha,
   pipelinePath,
-  repositoryUrl,
-  accessToken,
-}: ProcessPipelineVersionInput): Promise<ProcessPipelineVersionResult> => {
+  outcome,
+}: {
+  projectId: string;
+  commitSha: string;
+  pipelinePath: string;
+  outcome: PipelineOutcome;
+}): Promise<ProcessPipelineVersionResult> => {
   const commitSha = rawCommitSha.toLowerCase();
-
-  if (pipelinePath.length > MAX_PIPELINE_PATH_LENGTH) {
-    throw new AppError("Pipeline path is too long", 400);
+  if (pipelinePath.trim().length === 0 || pipelinePath.length > MAX_PIPELINE_PATH_LENGTH) {
+    throw new AppError("Pipeline path is invalid or too long", 400);
   }
 
-  const existing = await findPipelineVersion(projectId, commitSha);
+  const existing = await findPipelineVersion(projectId, commitSha, pipelinePath);
   if (existing) return toResult(existing);
 
-  const rawYaml = await readPipelineAtCommit({
-    repositoryUrl,
-    commitSha,
-    pipelinePath,
-    accessToken,
-  });
-
-  const outcome = evaluatePipeline(rawYaml, pipelinePath);
-
+  // Match the database's actual unique key: project + commit + path.
   const [inserted] = await db
     .insert(pipelineVersions)
     .values({ projectId, path: pipelinePath, commitSha, ...outcome })
-    .onConflictDoNothing({ target: [pipelineVersions.projectId, pipelineVersions.commitSha] })
+    .onConflictDoNothing({
+      target: [pipelineVersions.projectId, pipelineVersions.commitSha, pipelineVersions.path],
+    })
     .returning(versionColumns);
 
   if (inserted) return toResult(inserted);
 
-  // Another worker inserted the same (project, commit) first.
-  const winner = await findPipelineVersion(projectId, commitSha);
+  const winner = await findPipelineVersion(projectId, commitSha, pipelinePath);
   if (!winner) throw new AppError("Pipeline version could not be resolved after conflict", 500);
-
   return toResult(winner);
+};
+
+/** Read, parse, validate and normalize the repository pipeline at an exact commit. */
+export const processPipelineVersion = async ({
+  projectId,
+  commitSha,
+  pipelinePath,
+  repositoryUrl,
+  accessToken,
+}: ProcessPipelineVersionInput): Promise<ProcessPipelineVersionResult> => {
+  const normalizedCommitSha = commitSha.toLowerCase();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(normalizedCommitSha)) {
+    throw new AppError("Invalid repository commit SHA", 400);
+  }
+
+  const existing = await findPipelineVersion(projectId, normalizedCommitSha, pipelinePath);
+  if (existing) return toResult(existing);
+
+  const rawYaml = await readPipelineAtCommit({
+    repositoryUrl,
+    commitSha: normalizedCommitSha,
+    pipelinePath,
+    accessToken,
+  });
+
+  return persistPipelineVersion({
+    projectId,
+    commitSha: normalizedCommitSha,
+    pipelinePath,
+    outcome: evaluatePipeline(rawYaml, pipelinePath),
+  });
+};
+
+/**
+ * Validate a caller-provided manual pipeline with the same strict contract as
+ * repository pipelines. The caller gives it a distinct immutable path so it
+ * cannot overwrite the pipeline that was actually committed to the repository.
+ */
+export const processRawPipelineVersion = async ({
+  projectId,
+  commitSha,
+  pipelinePath,
+  rawYaml,
+}: ProcessRawPipelineVersionInput): Promise<ProcessPipelineVersionResult> => {
+  if (rawYaml.length > 65_536) throw new AppError("Pipeline YAML is too large", 413);
+  return persistPipelineVersion({
+    projectId,
+    commitSha,
+    pipelinePath,
+    outcome: evaluatePipeline(rawYaml, pipelinePath),
+  });
 };

@@ -20,6 +20,7 @@ import {
   and,
   desc,
   eq,
+  inArray,
 } from "drizzle-orm";
 
 import {
@@ -73,6 +74,9 @@ export type CreateArtifactFromFileInput = {
     | null;
 
   expiresAt?: Date | null;
+  /** Internal retry path: reuse a failed/stale in-progress row from this logical output. */
+  retryArtifactId?: string;
+  expectedProducerJobAttemptId?: string;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -554,6 +558,8 @@ export const createArtifactFromFile =
     producerJobId = null,
     producerJobAttemptId = null,
     expiresAt = null,
+    retryArtifactId,
+    expectedProducerJobAttemptId,
   }: CreateArtifactFromFileInput): Promise<Artifact> => {
     const normalizedRunId =
       normalizeUuid(
@@ -676,63 +682,71 @@ export const createArtifactFromFile =
     let artifact: Artifact;
 
     try {
-      const [created] =
-        await db
+      if (retryArtifactId !== undefined) {
+        if (
+          expectedProducerJobAttemptId === undefined ||
+          normalizedProducerJobId === null ||
+          normalizedProducerJobAttemptId === null
+        ) {
+          throw new AppError("Artifact retry metadata is incomplete", 500);
+        }
+
+        const [reused] = await db
+          .update(artifacts)
+          .set({
+            name: normalizedName,
+            kind,
+            contentType: normalizedContentType,
+            producerJobId: normalizedProducerJobId,
+            producerJobAttemptId: normalizedProducerJobAttemptId,
+            status: "uploading",
+            sha256: null,
+            s3BucketName: normalizedBucket,
+            objectKey: `pending/${crypto.randomUUID()}`,
+            sizeInBytes: sourceStats.size,
+            expiresAt,
+            uploadedAt: null,
+            deletedAt: null,
+          })
+          .where(and(
+            eq(artifacts.id, retryArtifactId),
+            eq(artifacts.runId, run.runId),
+            eq(artifacts.producerJobAttemptId, expectedProducerJobAttemptId),
+            inArray(artifacts.status, ["failed", "uploading"]),
+          ))
+          .returning();
+
+        if (!reused) {
+          throw new AppError("Artifact retry lost a concurrent update; retry the job again", 409);
+        }
+        artifact = reused;
+      } else {
+        const [created] = await db
           .insert(artifacts)
           .values({
-            runId:run.runId,
-            name:
-              normalizedName,
-
+            runId: run.runId,
+            name: normalizedName,
             kind,
-
-            contentType:
-              normalizedContentType,
-
-            producerJobId:
-              normalizedProducerJobId,
-
-            producerJobAttemptId:
-              normalizedProducerJobAttemptId,
-
-            status:
-              "uploading",
-
-            sha256:
-              null,
-
-            s3BucketName:
-              normalizedBucket,
-
-            /**
-             * Placeholder. We update it immediately below
-             * after the generated artifact ID is known.
-             */
-            objectKey:
-              `pending/${crypto.randomUUID()}`,
-
-            sizeInBytes:
-              sourceStats.size,
-
-            expiresAt:
-              expiresAt,
-
-            uploadedAt:
-              null,
-
-            deletedAt:
-              null,
+            contentType: normalizedContentType,
+            producerJobId: normalizedProducerJobId,
+            producerJobAttemptId: normalizedProducerJobAttemptId,
+            status: "uploading",
+            sha256: null,
+            s3BucketName: normalizedBucket,
+            objectKey: `pending/${crypto.randomUUID()}`,
+            sizeInBytes: sourceStats.size,
+            expiresAt,
+            uploadedAt: null,
+            deletedAt: null,
           })
           .returning();
 
-      if (!created) {
-        throw new AppError(
-          "Failed to create artifact record",
-          500,
-        );
-      }
+        if (!created) {
+          throw new AppError("Failed to create artifact record", 500);
+        }
 
-      artifact = created;
+        artifact = created;
+      }
     } catch (error: unknown) {
       if (
         isUniqueViolation(
@@ -1168,11 +1182,76 @@ export const createFrontendBuildArtifact =
     artifactName?: string;
     expiresAt?: Date | null;
   }): Promise<Artifact> => {
-    const normalizedRunId =
-      normalizeUuid(
-        runId,
-        "runId",
-      );
+    const normalizedRunId = normalizeUuid(runId, "runId");
+    const normalizedArtifactName = normalizeArtifactName(artifactName);
+    const normalizedBucket = normalizeBucketName(s3BucketName);
+    const normalizedProducerJobId = producerJobId == null
+      ? null
+      : normalizeUuid(producerJobId, "producerJobId");
+    const normalizedProducerJobAttemptId = producerJobAttemptId == null
+      ? null
+      : normalizeUuid(producerJobAttemptId, "producerJobAttemptId");
+    assertProducerConsistency({ producerJobId, producerJobAttemptId });
+    let retryArtifact: { id: string; expectedProducerJobAttemptId: string } | undefined;
+
+    // Output names are unique per run. Re-delivered attempts should reuse a ready
+    // immutable artifact instead of failing on the unique constraint.
+    const [existingArtifact] = await db
+      .select()
+      .from(artifacts)
+      .where(and(
+        eq(artifacts.runId, normalizedRunId),
+        eq(artifacts.name, normalizedArtifactName),
+      ))
+      .limit(1);
+
+    if (existingArtifact !== undefined) {
+      const usableReadyArtifact =
+        existingArtifact.status === "ready" &&
+        existingArtifact.kind === "archive" &&
+        existingArtifact.s3BucketName === normalizedBucket &&
+        existingArtifact.producerJobId === normalizedProducerJobId &&
+        existingArtifact.sha256 !== null &&
+        existingArtifact.uploadedAt !== null &&
+        existingArtifact.deletedAt === null &&
+        (existingArtifact.expiresAt === null || existingArtifact.expiresAt.getTime() > Date.now());
+      if (usableReadyArtifact) return existingArtifact;
+
+      const sameLogicalOutput =
+        existingArtifact.kind === "archive" &&
+        existingArtifact.s3BucketName === normalizedBucket &&
+        existingArtifact.producerJobId === normalizedProducerJobId &&
+        normalizedProducerJobId !== null &&
+        existingArtifact.producerJobAttemptId !== null &&
+        (existingArtifact.status === "failed" || existingArtifact.status === "uploading");
+
+      if (sameLogicalOutput) {
+        const [ownerAttempt] = await db
+          .select({ status: jobAttempts.status, leaseExpiresAt: jobAttempts.leaseExpiresAt })
+          .from(jobAttempts)
+          .where(eq(jobAttempts.id, existingArtifact.producerJobAttemptId!))
+          .limit(1);
+        const ownerStillActive = ownerAttempt !== undefined && (
+          ownerAttempt.status === "queued" ||
+          (ownerAttempt.status === "running" &&
+            (ownerAttempt.leaseExpiresAt === null || ownerAttempt.leaseExpiresAt.getTime() > Date.now()))
+        );
+
+        if (!ownerStillActive) {
+          retryArtifact = {
+            id: existingArtifact.id,
+            expectedProducerJobAttemptId: existingArtifact.producerJobAttemptId!,
+          };
+        } else {
+          throw new AppError(`Artifact output "${normalizedArtifactName}" is still being produced`, 409);
+        }
+      } else {
+        throw new AppError(
+          `Artifact output "${normalizedArtifactName}" already exists but is not reusable; inspect its artifact record before retrying`,
+          409,
+        );
+      }
+    }
 
     const normalizedDistDirectory =
       distDirectory.trim();
@@ -1273,32 +1352,21 @@ export const createFrontendBuildArtifact =
        * One upload only.
        */
       return await createArtifactFromFile({
-        runId:
-          normalizedRunId,
-
-        name:
-          artifactName,
-
-        kind:
-          "archive",
-
-        localFilePath:
-          zipPath,
-
-        s3BucketName:
-          s3BucketName,
-
-        contentType:
-          "application/zip",
-
-        producerJobId:
-          producerJobId,
-
-        producerJobAttemptId:
-          producerJobAttemptId,
-
-        expiresAt:
-          expiresAt,
+        runId: normalizedRunId,
+        name: normalizedArtifactName,
+        kind: "archive",
+        localFilePath: zipPath,
+        s3BucketName: normalizedBucket,
+        contentType: "application/zip",
+        producerJobId: normalizedProducerJobId,
+        producerJobAttemptId: normalizedProducerJobAttemptId,
+        expiresAt,
+        ...(retryArtifact === undefined
+          ? {}
+          : {
+              retryArtifactId: retryArtifact.id,
+              expectedProducerJobAttemptId: retryArtifact.expectedProducerJobAttemptId,
+            }),
       });
     } finally {
       /**
@@ -1327,3 +1395,5 @@ export const createFrontendBuildArtifact =
       }
     }
   };
+
+

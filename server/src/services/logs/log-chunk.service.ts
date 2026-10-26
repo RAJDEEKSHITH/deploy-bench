@@ -4,6 +4,7 @@ import {
 
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -13,6 +14,7 @@ import {
   eq,
 } from "drizzle-orm";
 
+import { env } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import {
   jobAttempts,
@@ -93,7 +95,7 @@ const SEQUENCE_WIDTH = 6;
  * AWS SDK resolves region/credentials through its normal provider chain.
  */
 const s3Client =
-  new S3Client({});
+  new S3Client({ region: env.S3_REGION });
 
 /**
  * Call once during application shutdown.
@@ -102,6 +104,39 @@ export const closeLogStorage =
   (): void => {
     s3Client.destroy();
   };
+
+
+/**
+ * Read one durable log chunk from S3.
+ * The database stores chunk metadata; the object body remains in S3.
+ */
+export const readLogChunk = async ({
+  bucket,
+  key,
+}: {
+  bucket: string;
+  key: string;
+}): Promise<string> => {
+  const normalizedBucket = bucket.trim();
+  const normalizedKey = key.trim();
+
+  if (!normalizedBucket || !normalizedKey) {
+    throw new AppError("Log chunk storage metadata is invalid", 500);
+  }
+
+  const response = await s3Client.send(
+    new GetObjectCommand({
+      Bucket: normalizedBucket,
+      Key: normalizedKey,
+    }),
+  );
+
+  if (!response.Body) {
+    throw new AppError("S3 log chunk response was empty", 502);
+  }
+
+  return response.Body.transformToString("utf-8");
+};
 
 /* -------------------------------------------------------------------------- */
 /* Validation                                                                 */
@@ -855,3 +890,5 @@ let uploadedObject:
   throw error;
   }
 };
+
+

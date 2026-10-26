@@ -303,8 +303,7 @@ const publishMessage =
 
       case QUEUE_NAMES.deployment: {
         if (
-          message.messageType !==
-          JOB_NAMES.deployment
+          message.messageType !== JOB_NAMES.deployment
         ) {
           throw new Error(
             "Invalid deployment outbox message type",

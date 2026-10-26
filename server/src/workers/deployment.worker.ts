@@ -240,7 +240,7 @@ const notifyDeploymentFinished = async (
       row.deployment.status !== "success" &&
       row.deployment.status !== "failed" &&
       row.deployment.status !== "superseded" &&
-      row.deployment.status !== "canceled"
+      row.deployment.status !== "cancelled"
     ) {
       return;
     }
@@ -307,7 +307,7 @@ const claimDeployment = async (
         row.deployment.status === "success" ||
         row.deployment.status === "failed" ||
         row.deployment.status === "superseded" ||
-        row.deployment.status === "canceled"
+        row.deployment.status === "cancelled"
       ) {
         return { status: "already_finished" };
       }

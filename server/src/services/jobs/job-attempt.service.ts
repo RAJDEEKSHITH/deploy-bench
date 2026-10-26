@@ -4,7 +4,9 @@ import {
   jobAttempts,
   jobDependencies,
   jobs,
+  outboxMessages,
 } from "../../db/schema.js";
+import { JOB_NAMES, QUEUE_NAMES } from "../../queues/queue-names.js";
 import { AppError } from "../../utils/app.error.js";
 
 export type CreateJobAttemptResult = {
@@ -113,7 +115,7 @@ export const createJobAttempt = async (
         jobId: job.id,
         attemptNumber,
         status: "queued",
-        queueName: "job-attempt",
+        queueName: QUEUE_NAMES.jobAttempt,
       })
       .returning({
         id: jobAttempts.id,
@@ -128,6 +130,25 @@ export const createJobAttempt = async (
         500,
       );
     }
+
+    // The durable attempt and its queue request must commit atomically.
+    // The outbox publisher will turn this row into a BullMQ message.
+    await tx
+      .insert(outboxMessages)
+      .values({
+        messageType: JOB_NAMES.jobAttempt,
+        aggregateType: "job_attempt",
+        aggregateId: attempt.id,
+        dedupeKey: `job-attempt:${attempt.id}`,
+        payload: {
+          jobAttemptId: attempt.id,
+          jobId: job.id,
+          runId: job.runId,
+        },
+        queueName: QUEUE_NAMES.jobAttempt,
+        status: "pending",
+      })
+      .onConflictDoNothing({ target: outboxMessages.dedupeKey });
 
     /*
      * Move the logical job to running only after the attempt exists.
@@ -166,3 +187,5 @@ export const createJobAttempt = async (
     };
   });
 };
+
+

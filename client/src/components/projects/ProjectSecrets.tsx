@@ -101,8 +101,7 @@ const ProjectSecrets = ({
             </div>
 
             <p className="mt-1 text-sm text-muted-foreground">
-              Secure values available to this project's
-              pipelines.
+              Encrypted values available to this project's pipelines. To publish images to this project's own ECR registry, create ECR_AWS_ACCESS_KEY_ID and ECR_AWS_SECRET_ACCESS_KEY; ECR_AWS_SESSION_TOKEN is optional for temporary credentials. If the pair is absent, DeployBench falls back to the server operator's AWS identity.
             </p>
           </div>
 
@@ -140,8 +139,7 @@ const ProjectSecrets = ({
               </h3>
 
               <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-                Add a secret such as GITHUB_TOKEN or
-                DATABASE_URL for your pipelines to use.
+                Add a secret such as GITHUB_TOKEN. For the project's ECR account, add ECR_AWS_ACCESS_KEY_ID and ECR_AWS_SECRET_ACCESS_KEY, plus optional ECR_AWS_SESSION_TOKEN.
               </p>
 
               <Button
@@ -288,3 +286,4 @@ const ProjectSecrets = ({
 };
 
 export default ProjectSecrets;
+

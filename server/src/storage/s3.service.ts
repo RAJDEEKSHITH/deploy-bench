@@ -45,6 +45,7 @@ import type {
   NodeJsClient,
 } from "@smithy/types";
 
+import { env } from "../config/env.js";
 import { AppError } from "../utils/app.error.js";
 
 /* -------------------------------------------------------------------------- */
@@ -86,7 +87,7 @@ const SHA256_HEX_LENGTH = 64;
  * credentials and region are not explicitly supplied.
  */
 const s3Client =
-  new S3Client({});
+  new S3Client({ region: env.S3_REGION });
 
 /**
  * Node-specific narrowed client.
@@ -712,3 +713,5 @@ export const deleteObjectFromS3 =
       }),
     );
   };
+
+

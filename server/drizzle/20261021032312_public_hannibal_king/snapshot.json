@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "02909974-f7b6-472b-81de-b22830c975a0",
+  "id": "36b74edf-3ad2-4b0c-8e7e-a5e49ca81100",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -54,7 +54,7 @@
         "verifying",
         "success",
         "failed",
-        "canceled",
+        "cancelled",
         "superseded"
       ],
       "name": "deployment_status",
@@ -78,7 +78,7 @@
         "infrastructure",
         "timeout",
         "authorization",
-        "canceled",
+        "cancelled",
         "unknown"
       ],
       "name": "failure_class",
@@ -91,7 +91,7 @@
         "running",
         "success",
         "failed",
-        "canceled",
+        "cancelled",
         "timed_out"
       ],
       "name": "job_attempt_status",
@@ -103,7 +103,7 @@
         "blocked",
         "queued",
         "running",
-        "succcess",
+        "success",
         "failed",
         "cancelled",
         "skipped"
@@ -159,7 +159,7 @@
         "running",
         "success",
         "failed",
-        "canceled",
+        "cancelled",
         "superseded"
       ],
       "name": "run_status",
@@ -178,7 +178,7 @@
     },
     {
       "values": [
-        "recevied",
+        "received",
         "queued",
         "processing",
         "processed",
@@ -456,7 +456,7 @@
     {
       "type": "bigint",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1106,7 +1106,7 @@
     {
       "type": "varchar(128)",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1236,7 +1236,7 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1338,6 +1338,19 @@
       "table": "environments"
     },
     {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "desired_run_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "environments"
+    },
+    {
       "type": "varchar(128)",
       "typeSchema": null,
       "notNull": false,
@@ -1364,7 +1377,7 @@
       "table": "environments"
     },
     {
-      "type": "varchar(128)",
+      "type": "varchar(512)",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
@@ -1507,22 +1520,9 @@
       "table": "github_integrations"
     },
     {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "webhook_secret_version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "github_integrations"
-    },
-    {
       "type": "varchar(128)",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1873,7 +1873,7 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1938,7 +1938,7 @@
     {
       "type": "jsonb",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -2129,7 +2129,7 @@
     {
       "type": "integer",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -2608,7 +2608,7 @@
       "table": "pipeline_versions"
     },
     {
-      "type": "varchar(256)",
+      "type": "varchar(512)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -3154,19 +3154,6 @@
       "table": "secrets"
     },
     {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "version",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "secrets"
-    },
-    {
       "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
@@ -3208,7 +3195,7 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -3253,6 +3240,19 @@
       "generated": null,
       "identity": null,
       "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "users"
+    },
+    {
+      "type": "varchar(256)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -3325,7 +3325,7 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -3338,7 +3338,7 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -3366,7 +3366,7 @@
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
-      "default": "'recevied'",
+      "default": "'received'",
       "generated": null,
       "identity": null,
       "name": "status",
@@ -3422,19 +3422,6 @@
       "generated": null,
       "identity": null,
       "name": "is_deleted",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "webhook_deliveries"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "is_signature_valid",
       "entityType": "columns",
       "schema": "public",
       "table": "webhook_deliveries"
@@ -3499,7 +3486,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "recevied_at",
+      "name": "received_at",
       "entityType": "columns",
       "schema": "public",
       "table": "webhook_deliveries"
@@ -3525,7 +3512,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "attempted_at",
+      "name": "last_attempt_at",
       "entityType": "columns",
       "schema": "public",
       "table": "webhook_deliveries"
@@ -3559,12 +3546,12 @@
     {
       "type": "timestamp with time zone",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
-      "default": "now()",
+      "default": null,
       "generated": null,
       "identity": null,
-      "name": "updated_at",
+      "name": "dead_lettered_at",
       "entityType": "columns",
       "schema": "public",
       "table": "webhook_deliveries"
@@ -3572,12 +3559,25 @@
     {
       "type": "timestamp with time zone",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
-      "default": null,
+      "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "dead_lettered_at",
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "webhook_deliveries"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "webhook_deliveries"
@@ -3852,13 +3852,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "run_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
           "value": "environment_id",
           "isExpression": false,
           "asc": true,
@@ -3867,11 +3860,11 @@
         }
       ],
       "isUnique": true,
-      "where": null,
+      "where": "\"status\" IN ('queued', 'deploying', 'verifying')",
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "deployments_run_environment_unique",
+      "name": "deployments_one_active_per_env",
       "entityType": "indexes",
       "schema": "public",
       "table": "deployments"
@@ -3900,6 +3893,34 @@
       "method": "btree",
       "concurrently": false,
       "name": "deployments_environment_id__created_at_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "deployments"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "run_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "environment_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"status\" NOT IN ('failed','cancelled')",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "deployments_run_environment_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "deployments"
@@ -4391,27 +4412,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "log_stream_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "log_chunks_stream_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "log_chunks"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "job_attempt_id",
           "isExpression": false,
           "asc": true,
@@ -4432,27 +4432,6 @@
       "method": "btree",
       "concurrently": false,
       "name": "log_streams_job_attempt_stream_type_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "log_streams"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "job_attempt_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "log_streams_job_attempt_id_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "log_streams"
@@ -4550,6 +4529,13 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
+        },
+        {
+          "value": "path",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
         }
       ],
       "isUnique": true,
@@ -4557,7 +4543,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "pipeline_versions_project_commit_unique",
+      "name": "pipeline_versions_project_commit__path_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "pipeline_versions"
@@ -4972,7 +4958,7 @@
           "opclass": null
         },
         {
-          "value": "recevied_at",
+          "value": "received_at",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -5230,6 +5216,23 @@
     {
       "nameExplicit": false,
       "columns": [
+        "desired_run_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "runs",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "environments_desired_run_id_runs_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "environments"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "current_image_id"
       ],
       "schemaTo": "public",
@@ -5463,7 +5466,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "SET NULL",
+      "onDelete": "CASCADE",
       "name": "projects_created_by_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
@@ -5548,7 +5551,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "name": "secrets_project_id_projects_id_fkey",
       "entityType": "fks",
       "schema": "public",
@@ -5565,7 +5568,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "name": "secrets_environment_id_environments_id_fkey",
       "entityType": "fks",
       "schema": "public",
@@ -5747,6 +5750,16 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "outbox_messages_pkey",
+      "schema": "public",
+      "table": "outbox_messages",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "pipeline_versions_pkey",
       "schema": "public",
       "table": "pipeline_versions",
@@ -5834,6 +5847,13 @@
       "table": "dead_letters"
     },
     {
+      "value": "\"action\" <> 'deploy' OR \"run_id\" IS NOT NULL",
+      "name": "deployments_deploy_requires_run",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "deployments"
+    },
+    {
       "value": "\n        (\n          \"action\" = 'rollback'\n          AND\n          \"rollback_to_deployment_id\" IS NOT NULL\n        )\n        OR\n        (\n          \"action\" = 'deploy'\n          AND\n          \"rollback_to_deployment_id\" IS NULL\n        )\n      ",
       "name": "deployments_rollback_target_check",
       "entityType": "checks",
@@ -5855,11 +5875,11 @@
       "table": "environments"
     },
     {
-      "value": "\"webhook_secret_version\" > 0",
-      "name": "github_integrations_webhook_secret_version",
+      "value": "\"target_type\" <> 'ssh_ec2' OR \"health_check_url\" IS NOT NULL",
+      "name": "environments_backend_health_check_required",
       "entityType": "checks",
       "schema": "public",
-      "table": "github_integrations"
+      "table": "environments"
     },
     {
       "value": "\"attempt_number\" >= 1",
@@ -5933,14 +5953,7 @@
     },
     {
       "value": "(\n      (\"project_id\" IS NOT NULL AND \"environment_id\" IS NULL)\n      OR\n     (\"project_id\" IS NULL AND \"environment_id\" IS NOT NULL)\n     )",
-      "name": "secrets_excatly_one_scope_check",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "secrets"
-    },
-    {
-      "value": "\"version\" > 0",
-      "name": "secrets_version_check",
+      "name": "secrets_exactly_one_scope_check",
       "entityType": "checks",
       "schema": "public",
       "table": "secrets"

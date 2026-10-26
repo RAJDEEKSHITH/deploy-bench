@@ -2,6 +2,7 @@ import type { Job } from "bullmq";
 import {
   executeJobAttempt,
 } from "../services/execution/execution.service.js";
+import { advanceRunForAttempt } from "../services/runs/run-orchestrator.service.js";
 
 export const JOB_ATTEMPT_QUEUE_NAME = "job-attempt";
 
@@ -29,8 +30,15 @@ export const processJobAttempt = async (
     );
   }
 
-  return executeJobAttempt({
+  const result = await executeJobAttempt({
     attemptId: jobAttemptId,
     queueJobId: String(job.id),
   });
+
+  // Every attempt outcome may unblock dependents, queue a retry, or finish
+  // the run. Run state is derived from PostgreSQL rather than BullMQ state.
+  await advanceRunForAttempt(jobAttemptId);
+  return result;
 };
+
+

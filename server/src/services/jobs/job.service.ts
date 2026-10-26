@@ -95,6 +95,43 @@ const validateNormalizedJob = (
       500,
     );
   }
+
+  // Older immutable pipeline versions may not have output declarations.
+  const artifacts: unknown = (job as { artifacts?: unknown }).artifacts;
+  if (artifacts !== undefined && !Array.isArray(artifacts)) {
+    throw new AppError(`Invalid artifacts for job "${jobKey}"`, 500);
+  }
+  for (const artifact of (Array.isArray(artifacts) ? artifacts : [])) {
+    if (
+      artifact === null ||
+      typeof artifact !== "object" ||
+      Array.isArray(artifact) ||
+      typeof (artifact as { name?: unknown }).name !== "string" ||
+      typeof (artifact as { path?: unknown }).path !== "string"
+    ) {
+      throw new AppError(`Invalid artifact declaration for job "${jobKey}"`, 500);
+    }
+  }
+
+  const containerImage: unknown = (job as { containerImage?: unknown }).containerImage;
+  if (containerImage !== undefined) {
+    if (
+      containerImage === null ||
+      typeof containerImage !== "object" ||
+      Array.isArray(containerImage)
+    ) {
+      throw new AppError(`Invalid container image declaration for job "${jobKey}"`, 500);
+    }
+    const image = containerImage as Record<string, unknown>;
+    for (const field of ["name", "registry", "repository", "contextPath", "dockerfilePath"] as const) {
+      if (typeof image[field] !== "string" || image[field].trim().length === 0) {
+        throw new AppError(`Invalid container image ${field} for job "${jobKey}"`, 500);
+      }
+    }
+    if (image.platform !== undefined && typeof image.platform !== "string") {
+      throw new AppError(`Invalid container image platform for job "${jobKey}"`, 500);
+    }
+  }
 };
 
 export type CreateJobsForRunResult = {
@@ -249,6 +286,22 @@ export const createJobsForRun = async (
           timeoutSeconds: job.timeoutSeconds,
           maxAttempts: job.maxAttempts,
           allowFailure: job.allowFailure,
+          // Default to an empty array for historical normalized pipelines.
+          artifacts: [...(job.artifacts ?? [])].map(({ name, path }) => ({ name, path })),
+          ...(job.containerImage === undefined
+            ? {}
+            : {
+                containerImage: {
+                  name: job.containerImage.name,
+                  registry: job.containerImage.registry,
+                  repository: job.containerImage.repository,
+                  contextPath: job.containerImage.contextPath,
+                  dockerfilePath: job.containerImage.dockerfilePath,
+                  ...(job.containerImage.platform === undefined
+                    ? {}
+                    : { platform: job.containerImage.platform }),
+                },
+              }),
         },
         status: "blocked" as const,
         allowFailure: job.allowFailure,
@@ -325,3 +378,5 @@ export const createJobsForRun = async (
     };
   });
 };
+
+
