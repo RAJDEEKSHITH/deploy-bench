@@ -20,6 +20,11 @@
 
 ---
 
+## 🎥 Demo
+
+[▶️ Watch DeployBench Working Demo on YouTube](https://www.youtube.com/watch?v=Ps28MnUJizc)
+
+---
 ## 📖 Overview
 
 DeployBench is a mini GitHub Actions / Jenkins that you host yourself. Push to GitHub, and DeployBench:
